@@ -1,0 +1,112 @@
+<!doctype html>
+<!--
+  TT Layout: a Tiny Tapeout project's layout, as published to its GitHub Pages by TT's `viewer` job:
+  the 2D render, TT's 3D viewer, and the Tiny Tapeout Explorer. Follows `tt/run-status` (from TT
+  Progress) to know when a commit's layout is published. See README.md.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>TT Layout</title>
+<style>
+  body { font: 13px system-ui, sans-serif; margin: 0; color: #222; background: #fff;
+         display: flex; flex-direction: column; height: 100vh; }
+  body.dark { color: #ddd; background: #1e1e1e; }
+  .muted { opacity: 0.6; }
+  #bar { padding: 4px 8px; }
+  #bar button.active { font-weight: bold; }
+  #content { flex: 1; overflow: auto; }
+  #content img { display: block; max-width: 100%; height: auto; margin: auto; }
+  #content iframe { border: 0; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <button data-tab="2d" class="active">2D</button>
+  <button data-tab="3d">3D</button>
+  <button data-tab="explorer">Explorer</button>
+  <span id="note" class="muted">Waiting for a Tiny Tapeout project...</span>
+</div>
+<div id="content"></div>
+<script src="https://cdn.jsdelivr.net/npm/@rweda/makerchip-view-client@0.2/dist/index.global.js"></script>
+<script>
+const view = MakerchipView.connect();
+// Tab status. Needs `rpc: true` in the opener's channel, like every call to the IDE.
+const setStatus = status => view.call('setStatus', status).catch(e => console.warn('TT view: setStatus:', e));
+let repo, pages, pdk, shownSha;
+let tab = '2d';
+let stamp = Date.now();  // Cache-buster for the render: Pages caches for 10 minutes.
+
+view.on('theme', ({ dark }) => document.body.classList.toggle('dark', dark));
+view.on('tt/run-start', p => {
+  setRepo(p.repo);
+  note(`Waiting for the layout of ${p.sha.slice(0, 7)}...`);
+  setStatus('working');
+});
+view.on('tt/run-status', p => {
+  setRepo(p.repo);
+  const gds = p.runs.find(r => r.name === 'gds');
+  if (!gds) { return; }
+  const sha7 = p.sha.slice(0, 7);
+  if (gds.status !== 'completed') {
+    note(`Building the layout of ${sha7}...`);
+    setStatus('working');
+  } else if (gds.jobs.find(j => j.name === 'viewer')?.conclusion === 'success') {
+    if (shownSha !== p.sha) {
+      shownSha = p.sha;
+      stamp = p.sha;
+      show();
+    }
+    note(`Layout of ${sha7}`);
+    setStatus('success');
+  } else {
+    note(`The gds workflow failed for ${sha7}; showing the last published layout.`);
+    setStatus('fail');
+  }
+});
+view.call('getContext').then(ctx => {
+  document.body.classList.toggle('dark', ctx.theme.dark);
+  if (ctx.params?.repo) {
+    setRepo(ctx.params.repo);
+    note('Last published layout');
+  }
+}).catch(e => note(`Cannot reach the Makerchip IDE (${e.message}). Open this view with channel "rpc: true".`));
+
+for (const button of document.querySelectorAll('#bar button')) {
+  button.onclick = () => {
+    tab = button.dataset.tab;
+    document.querySelectorAll('#bar button').forEach(b => b.classList.toggle('active', b === button));
+    show();
+  };
+}
+
+function note(text) {
+  document.getElementById('note').textContent = text;
+}
+
+function setRepo(newRepo) {
+  if (newRepo === repo) { return; }
+  repo = newRepo;
+  const [owner, name] = repo.split('/');
+  pages = `https://${owner.toLowerCase()}.github.io/${name}/`;
+  // The PDK is in the viewer job's redirect page.
+  pdk = fetch(pages, { cache: 'no-cache' }).then(r => r.text())
+    .then(html => html.match(/pdk=([\w-]+)/)?.[1] ?? 'sky130A', () => 'sky130A');
+  show();
+}
+
+async function show() {
+  if (!pages) { return; }
+  const content = document.getElementById('content');
+  const model = encodeURIComponent(`${pages}tinytapeout.oas`);
+  if (tab === '2d') {
+    content.innerHTML = `<img src="${pages}gds_render.png?v=${stamp}" alt="No layout has been published yet.">`;
+  } else if (tab === '3d') {
+    content.innerHTML = `<iframe src="https://gds-viewer.tinytapeout.com/?pdk=${await pdk}&model=${model}"></iframe>`;
+  } else {
+    content.innerHTML = `<iframe src="https://gds-explorer.tinytapeout.com/viewer?file=${model}&pdk=${await pdk}"></iframe>`;
+  }
+}
+</script>
+</body>
+</html>

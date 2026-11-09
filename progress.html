@@ -1,0 +1,122 @@
+<!doctype html>
+<!--
+  TT Progress: live status of a Tiny Tapeout project's GitHub Actions runs for one commit.
+  The single poller of the GitHub API (anonymous: 60 requests/hour), so it shares what it learns
+  as `tt/run-status` for the other TT views. See README.md.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>TT Progress</title>
+<style>
+  body { font: 13px system-ui, sans-serif; margin: 8px; color: #222; background: #fff; }
+  body.dark { color: #ddd; background: #1e1e1e; }
+  a { color: inherit; }
+  .muted { opacity: 0.6; }
+  .error { color: #d33; }
+  .run { margin: 0 0 10px; }
+  .run > .name { font-weight: bold; }
+  .job { margin-left: 1.5em; }
+  .step { margin-left: 3em; opacity: 0.75; }
+</style>
+</head>
+<body>
+<div id="head" class="muted">Waiting for a Tiny Tapeout project...</div>
+<div id="runs"></div>
+<div id="error" class="error"></div>
+<script src="https://cdn.jsdelivr.net/npm/@rweda/makerchip-view-client@0.2/dist/index.global.js"></script>
+<script>
+const POLL_MS = 60000;      // While runs are in progress. (Each poll costs 1 request, plus 1 per unfinished run.)
+const WAIT_MS = 15000;      // Until the pushed commit's runs appear.
+const ICON = { success: '✅', failure: '❌', cancelled: '⛔', skipped: '⏭️', timed_out: '⌛' };
+
+const view = MakerchipView.connect();
+// Tab status. Needs `rpc: true` in the opener's channel, like every call to the IDE.
+const setStatus = status => view.call('setStatus', status).catch(e => console.warn('TT view: setStatus:', e));
+let repo, sha, timer;
+const finishedJobs = new Map();  // run id -> jobs, once the run completes (they no longer change).
+let status = null;               // The last `tt/run-status` payload.
+
+view.expose({ getRunStatus: () => status });
+view.on('theme', ({ dark }) => document.body.classList.toggle('dark', dark));
+view.on('tt/run-start', p => track(p.repo, p.sha));
+view.call('getContext').then(ctx => {
+  document.body.classList.toggle('dark', ctx.theme.dark);
+  if (ctx.params?.repo) { track(ctx.params.repo, ctx.params.sha); }
+}).catch(e => {
+  document.getElementById('error').textContent =
+    `Cannot reach the Makerchip IDE (${e.message}). Open this view with channel "rpc: true".`;
+});
+
+function track(newRepo, newSha) {
+  repo = newRepo;
+  sha = newSha;  // Undefined: the latest commit with runs.
+  poll();
+}
+
+async function gh(path) {
+  const resp = await fetch(`https://api.github.com/repos/${repo}${path}`, { cache: 'no-cache' });
+  if (resp.status === 403 || resp.status === 429) {
+    const reset = resp.headers.get('x-ratelimit-reset');
+    throw new Error('GitHub API rate limit reached (60 requests/hour without sign-in)' +
+      (reset ? `; it resets at ${new Date(reset * 1000).toLocaleTimeString()}.` : '.'));
+  }
+  if (!resp.ok) {
+    throw new Error(`GitHub API: HTTP ${resp.status} for ${path}`);
+  }
+  return resp.json();
+}
+
+async function poll() {
+  clearTimeout(timer);
+  let delay = POLL_MS;
+  try {
+    sha ??= (await gh('/actions/runs?per_page=1')).workflow_runs[0]?.head_sha;
+    const runs = sha ? (await gh(`/actions/runs?head_sha=${sha}`)).workflow_runs : [];
+    for (const run of runs) {
+      run.jobs = finishedJobs.get(run.id) ?? (await gh(`/actions/runs/${run.id}/jobs`)).jobs;
+      if (run.status === 'completed') { finishedJobs.set(run.id, run.jobs); }
+    }
+    const done = runs.length > 0 && runs.every(r => r.status === 'completed');
+    const failed = runs.some(r => r.status === 'completed' && r.conclusion !== 'success');
+    setStatus(!done ? 'working' : failed ? 'fail' : 'success');
+    status = {
+      repo, sha, done,
+      runs: runs.map(r => ({ name: r.name, status: r.status, conclusion: r.conclusion, url: r.html_url,
+        jobs: r.jobs.map(j => ({ name: j.name, status: j.status, conclusion: j.conclusion })) })),
+    };
+    view.emit('tt/run-status', status);
+    render(runs);
+    document.getElementById('error').textContent = '';
+    if (done) { return; }
+    if (runs.length === 0) { delay = WAIT_MS; }
+  } catch (e) {
+    document.getElementById('error').textContent = e.message;
+  }
+  timer = setTimeout(poll, delay);
+}
+
+function icon(item) {
+  return item.status === 'completed' ? (ICON[item.conclusion] ?? '❔') : item.status === 'in_progress' ? '⏳' : '🕓';
+}
+
+function render(runs) {
+  document.getElementById('head').innerHTML = sha
+    ? `<a href="https://github.com/${repo}" target="_blank">${repo}</a> at
+       <a href="https://github.com/${repo}/commit/${sha}" target="_blank"><code>${sha.slice(0, 7)}</code></a>
+       <span class="muted">(updated ${new Date().toLocaleTimeString()})</span>`
+    : `${repo}: no runs yet.`;
+  document.getElementById('runs').innerHTML = runs.length === 0 && sha
+    ? '<div class="muted">Waiting for GitHub Actions to start...</div>'
+    : runs.map(r => `
+      <div class="run">
+        <div class="name">${icon(r)} <a href="${r.html_url}" target="_blank">${r.name}</a></div>
+        ${r.jobs.map(j => `
+          <div class="job">${icon(j)} ${j.name}</div>
+          ${(j.steps ?? []).filter(s => s.status === 'in_progress').map(s => `<div class="step">${s.name}</div>`).join('')}
+        `).join('')}
+      </div>`).join('');
+}
+</script>
+</body>
+</html>
