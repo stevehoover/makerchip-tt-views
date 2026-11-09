@@ -34,7 +34,8 @@ const view = MakerchipView.connect();
 // Tab status. Needs `rpc: true` in the opener's channel, like every call to the IDE.
 const setStatus = status => view.call('setStatus', status).catch(e => console.warn('TT view: setStatus:', e));
 let repo, sha, timer;
-const finishedJobs = new Map();  // run id -> jobs, once the run completes (they no longer change).
+let generation = 0;              // Bumped by track(), so only the latest poll loop runs and renders.
+const finishedJobs = new Map();  // run id -> jobs, once the run and its jobs complete (they no longer change).
 let status = null;               // The last `tt/run-status` payload.
 
 view.expose({ getRunStatus: () => status });
@@ -51,7 +52,8 @@ view.call('getContext').then(ctx => {
 function track(newRepo, newSha) {
   repo = newRepo;
   sha = newSha;  // Undefined: the latest commit with runs.
-  poll();
+  clearTimeout(timer);
+  poll(++generation);
 }
 
 async function gh(path) {
@@ -67,18 +69,21 @@ async function gh(path) {
   return resp.json();
 }
 
-async function poll() {
-  clearTimeout(timer);
+async function poll(gen) {
   let delay = POLL_MS;
   try {
     sha ??= (await gh('/actions/runs?per_page=1')).workflow_runs[0]?.head_sha;
     const runs = sha ? (await gh(`/actions/runs?head_sha=${sha}`)).workflow_runs : [];
     for (const run of runs) {
       run.jobs = finishedJobs.get(run.id) ?? (await gh(`/actions/runs/${run.id}/jobs`)).jobs;
-      if (run.status === 'completed') { finishedJobs.set(run.id, run.jobs); }
+      // The API's runs and jobs (each cached up to a minute) can disagree, e.g. a completed run with jobs
+      // still in progress, so a run is finished only when its jobs agree.
+      run.finished = run.status === 'completed' && run.jobs.every(j => j.status === 'completed');
+      if (run.finished) { finishedJobs.set(run.id, run.jobs); }
     }
-    const done = runs.length > 0 && runs.every(r => r.status === 'completed');
-    const failed = runs.some(r => r.status === 'completed' && r.conclusion !== 'success');
+    if (gen !== generation) { return; }
+    const done = runs.length > 0 && runs.every(r => r.finished);
+    const failed = runs.some(r => r.finished && r.conclusion !== 'success');
     setStatus(!done ? 'working' : failed ? 'fail' : 'success');
     status = {
       repo, sha, done,
@@ -93,7 +98,7 @@ async function poll() {
   } catch (e) {
     document.getElementById('error').textContent = e.message;
   }
-  timer = setTimeout(poll, delay);
+  if (gen === generation) { timer = setTimeout(() => poll(gen), delay); }
 }
 
 function icon(item) {

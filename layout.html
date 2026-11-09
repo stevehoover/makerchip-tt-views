@@ -48,10 +48,13 @@ view.on('tt/run-status', p => {
   const gds = p.runs.find(r => r.name === 'gds');
   if (!gds) { return; }
   const sha7 = p.sha.slice(0, 7);
-  if (gds.status !== 'completed') {
+  const viewer = gds.jobs.find(j => j.name === 'viewer');
+  // Judge by the jobs, and fail only once the run and all its jobs agree they are finished.
+  const finished = gds.status === 'completed' && gds.jobs.every(j => j.status === 'completed');
+  if (!(viewer?.status === 'completed' && viewer.conclusion === 'success') && !finished) {
     note(`Building the layout of ${sha7}...`);
     setStatus('working');
-  } else if (gds.jobs.find(j => j.name === 'viewer')?.conclusion === 'success') {
+  } else if (viewer?.conclusion === 'success') {
     if (shownSha !== p.sha) {
       shownSha = p.sha;
       stamp = p.sha;
