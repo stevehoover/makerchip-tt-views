@@ -6,7 +6,7 @@ project's GitHub Actions results inside the Makerchip IDE. They are served from 
 [Makerchip view client](https://www.npmjs.com/package/@rweda/makerchip-view-client).
 
 The Makerchip VS Code extension opens them for a project made from
-[ttsky-makerchip-template](https://github.com/stevehoover/ttsky-makerchip-template) when its "Run TT Flow"
+[tt-makerchip-template](https://github.com/stevehoover/tt-makerchip-template) when its "Run TT Flow"
 button pushes a commit. They need no sign-in: the project is public, its run status comes from the GitHub API
 anonymously, and its results from its GitHub Pages.
 

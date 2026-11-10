@@ -15,9 +15,9 @@
   .muted { opacity: 0.6; }
   #bar { padding: 4px 8px; }
   #bar button.active { font-weight: bold; }
-  #content { flex: 1; overflow: auto; }
-  #content img { display: block; max-width: 100%; height: auto; margin: auto; }
-  #content iframe { border: 0; width: 100%; height: 100%; }
+  #content { flex: 1; min-height: 0; overflow: auto; }  /* min-height: scroll here, not grow to the image. */
+  #content img { display: block; }  /* 1:1; #content scrolls both ways. */
+  #content iframe { display: block; border: 0; width: 100%; height: 100%; }  /* Block: no baseline gap to scroll. */
 </style>
 </head>
 <body>
