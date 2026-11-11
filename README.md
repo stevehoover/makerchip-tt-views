@@ -31,6 +31,18 @@ Each sets its tab status: working while its results are pending, then success or
   complete.
 - **RPC `getRunStatus()`** on TT Progress (with `rpc: true`) returns the last `tt/run-status` payload.
 
+## Where a TT run's results land
+
+What a new view can read. TT's workflows (`gds`, `test`, `docs`) all run on push.
+
+| Where | What | Readable without auth |
+|---|---|---|
+| GitHub Pages (`gds` workflow's `viewer` job) | redirect to TT's 3D viewer (with the PDK), `tinytapeout.{gds,oas}`, `gds_render.png` | yes, with CORS; `max-age=600` |
+| Run summary page | lint, Yosys warnings, routing stats, cell categories, precheck `results.md`, test summaries | HTML page only |
+| Artifact zips | `tt_submission`, `GDS_logs`, `precheck_reports`, `gatelevel_test_results`, `test-results`, `PDF`, `fpga_bitstream` | no |
+| Job logs | full output, including TT's check messages | no (repo admin) |
+| Actions REST API | run, job and step status | yes, for public repos (60 requests/hour) |
+
 ## Development
 
 Views loaded from local files (e.g. by the extension's `makerchip_open_third_party_view` `filePath`) become
