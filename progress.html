@@ -117,7 +117,7 @@ function render(runs) {
       <div class="run">
         <div class="name">${icon(r)} <a href="${r.html_url}" target="_blank">${r.name}</a></div>
         ${r.jobs.map(j => `
-          <div class="job">${icon(j)} ${j.name}</div>
+          <div class="job">${icon(j)} <a href="${j.html_url}" target="_blank">${j.name}</a></div>
           ${(j.steps ?? []).filter(s => s.status === 'in_progress').map(s => `<div class="step">${s.name}</div>`).join('')}
         `).join('')}
       </div>`).join('');
