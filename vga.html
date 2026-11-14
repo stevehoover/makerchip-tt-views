@@ -1,0 +1,121 @@
+<!doctype html>
+<!--
+  TT VGA: runs the Verilog of each Makerchip compile in VGA Playground, showing its Tiny VGA PMOD output
+  live, with its inputs and audio. See README.md.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>TT VGA</title>
+<style>
+  body { font: 13px system-ui, sans-serif; margin: 0; color: #222; background: #fff;
+         display: flex; flex-direction: column; height: 100vh; }
+  body.dark { color: #ddd; background: #1e1e1e; }
+  a { color: inherit; }
+  .muted { opacity: 0.6; }
+  #bar { display: flex; gap: 8px; padding: 4px 8px; }
+  #note { flex: 1; }
+  iframe { flex: 1; min-height: 0; border: 0; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <span id="note" class="muted">Waiting for a compile...</span>
+  <a class="muted" href="https://github.com/stevehoover/vga-playground" target="_blank" rel="noopener">VGA Playground (source)</a>
+</div>
+<iframe id="playground" allow="autoplay; gamepad"></iframe>
+<script src="https://cdn.jsdelivr.net/npm/@rweda/makerchip-view-client@0.2/dist/index.global.js"></script>
+<script>
+const PLAYGROUND_URL = 'https://stevehoover.github.io/vga-playground/?embed';
+const view = MakerchipView.connect();
+// Tab status. Needs `rpc: true` in the opener's channel, like every call to the IDE.
+const setStatus = status => view.call('setStatus', status).catch(e => console.warn('TT VGA: setStatus:', e));
+const playground = document.getElementById('playground');
+let playgroundReady = false;
+let currentId;   // The compile shown, or being loaded.
+let pendingLoad; // A load message waiting for the playground to be ready.
+
+view.on('theme', ({ dark }) => document.body.classList.toggle('dark', dark));
+view.on('compile-result', reflect);
+view.call('getContext').then(ctx => {
+  document.body.classList.toggle('dark', ctx.theme.dark);
+  playground.src = ctx.params?.playground ?? PLAYGROUND_URL;
+  // The latest compile, in case it finished before this view opened.
+  return view.call('getCompileStatus').then(st => st && reflect({
+    which: st.model === 'pending' ? 'start' : 'sandpiper', id: st.id, success: st.model === 'success',
+    resultsUrl: st.resultsUrl, artifacts: st.artifacts }));
+}).catch(e => note(`Cannot reach the Makerchip IDE (${e.message}). Open this view with channel "rpc: true".`));
+
+window.addEventListener('message', ({ source, data }) => {
+  if (source !== playground.contentWindow) { return; }
+  if (data?.type === 'vga-playground:ready') {
+    playgroundReady = true;
+    if (pendingLoad) { post(pendingLoad); }
+  } else if (data?.type === 'vga-playground:loaded' && data.id === currentId) {
+    // Its editor, which marks warnings, is hidden, so list them here (in the tooltip).
+    const warnings = data.errors.filter(e => e.type === 'warning');
+    note(!data.ok ? `VGA Playground could not build compile ${currentId}; see its messages.`
+      : warnings.length ? `Compile ${currentId}, with ${warnings.length} Verilator warning(s) (hover to see)`
+      : `Compile ${currentId}`,
+      warnings.map(e => `${e.file.replace(/^src\//, '')}:${e.line}: ${e.message}`).join('\n\n'));
+    setStatus(!data.ok ? 'fail' : warnings.length ? 'warning' : 'success');
+  }
+});
+
+/** Follow a `compile-result` event (see the Third-Party View API). */
+function reflect({ which, id, success, resultsUrl, artifacts }) {
+  if (which === 'start') {
+    currentId = id;
+    note('Compiling...');
+    setStatus('working');
+  } else if (which === 'sandpiper' && (id === currentId || currentId === undefined)) {
+    currentId = id;
+    if (!success) {
+      note('The Makerchip compile failed.');
+      setStatus('fail');
+    } else if (!resultsUrl) {
+      note('This compile\'s Verilog is not available to views.');
+      setStatus('fail');
+    } else if (artifacts?.['top_gen.sv']) {
+      // An include fragment, which VGA Playground would compile on its own.
+      note('Add --inlineGen to the \\m5_TLV_version line, to generate a single Verilog file.');
+      setStatus('fail');
+    } else {
+      load(id, resultsUrl, artifacts);
+    }
+  }
+}
+
+/** Load a compile's Verilog, and the files it downloaded, into VGA Playground. */
+async function load(id, resultsUrl, artifacts) {
+  note('Loading...');
+  const names = ['top.sv', ...Object.keys(artifacts ?? {}).filter(f => f.startsWith('sv_url_inc/'))];
+  try {
+    const texts = await Promise.all(names.map(async name => {
+      const resp = await fetch(new URL(name, resultsUrl));
+      if (!resp.ok) { throw new Error(`${name}: HTTP ${resp.status}`); }
+      return resp.text();
+    }));
+    if (id !== currentId) { return; }  // Superseded.
+    // By base name: VGA Playground finds modules among all its files, and `include`s by name.
+    const files = Object.fromEntries(names.map((name, i) => [name.split('/').pop(), texts[i]]));
+    note('Building...');
+    post({ type: 'vga-playground:load', id, files });
+  } catch (e) {
+    if (id !== currentId) { return; }
+    note(`Cannot fetch compile ${id}'s Verilog (${e.message}).`);
+    setStatus('fail');
+  }
+}
+
+function post(message) {
+  pendingLoad = playgroundReady ? undefined : message;
+  if (playgroundReady) { playground.contentWindow.postMessage(message, '*'); }
+}
+
+function note(text, title = '') {
+  Object.assign(document.getElementById('note'), { textContent: text, title });
+}
+</script>
+</body>
+</html>
