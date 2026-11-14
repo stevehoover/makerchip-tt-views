@@ -32,8 +32,8 @@ Each sets its tab status: working while its results are pending, then success or
   complete.
 - **RPC `getRunStatus()`** on TT Progress (with `rpc: true`) returns the last `tt/run-status` payload.
 - **TT VGA** subscribes to the IDE's `compile-result` and `theme` (`sources: ["ide"]`), and needs no `repo`. It
-  loads `top.sv` and the files under `sv_url_inc/` from each successful compile's `resultsUrl`. An optional
-  `params.playground` overrides the VGA Playground URL (e.g. a dev server's `http://localhost:5173/?embed`).
+  loads `top.sv` and the files under `sv_url_inc/` from each successful compile's `resultsUrl`. The page's
+  `?playground=<url>` overrides the VGA Playground URL (e.g. a dev server's `http://localhost:5173/?embed`).
 
 ## Designs for TT VGA
 

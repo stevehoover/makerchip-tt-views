@@ -26,11 +26,15 @@
 <iframe id="playground" allow="autoplay; gamepad"></iframe>
 <script src="https://cdn.jsdelivr.net/npm/@rweda/makerchip-view-client@0.2/dist/index.global.js"></script>
 <script>
+// VGA Playground in its embed mode (see its README, "Embedding"). `vga.html?playground=<url>` overrides it,
+// e.g. with a dev server's `http://localhost:5173/?embed`.
 const PLAYGROUND_URL = 'https://stevehoover.github.io/vga-playground/?embed';
+const playground = document.getElementById('playground');
+playground.src = new URLSearchParams(location.search).get('playground') ?? PLAYGROUND_URL;
+
 const view = MakerchipView.connect();
 // Tab status. Needs `rpc: true` in the opener's channel, like every call to the IDE.
 const setStatus = status => view.call('setStatus', status).catch(e => console.warn('TT VGA: setStatus:', e));
-const playground = document.getElementById('playground');
 let playgroundReady = false;
 let currentId;   // The compile shown, or being loaded.
 let pendingLoad; // A load message waiting for the playground to be ready.
@@ -39,7 +43,6 @@ view.on('theme', ({ dark }) => document.body.classList.toggle('dark', dark));
 view.on('compile-result', reflect);
 view.call('getContext').then(ctx => {
   document.body.classList.toggle('dark', ctx.theme.dark);
-  playground.src = ctx.params?.playground ?? PLAYGROUND_URL;
   // The latest compile, in case it finished before this view opened.
   return view.call('getCompileStatus').then(st => st && reflect({
     which: st.model === 'pending' ? 'start' : 'sandpiper', id: st.id, success: st.model === 'success',
