@@ -32,10 +32,18 @@ Each sets its tab status: working while its results are pending, then success or
   complete.
 - **RPC `getRunStatus()`** on TT Progress (with `rpc: true`) returns the last `tt/run-status` payload.
 - **TT VGA** subscribes to the IDE's `compile-result` and `theme` (`sources: ["ide"]`), and needs no `repo`. It
-  loads `top.sv` and the files under `sv_url_inc/` from each successful compile's `resultsUrl`. The page's
-  `?playground=<url>` overrides the VGA Playground URL (e.g. a dev server's `http://localhost:5173/?embed`).
+  loads the generated Verilog and the files under `sv_url_inc/` (as listed in `artifacts`) from each successful
+  compile's `resultsUrl`. The page's `?playground=<url>` overrides the VGA Playground URL (e.g. a dev server's
+  `http://localhost:5173/?embed`).
 
 ## Designs for TT VGA
+
+[tt-makerchip-template](https://github.com/stevehoover/tt-makerchip-template)'s `vga` setting meets all of this,
+using `tt_vga()` in Virtual FPGA Lab's `tiny_tapeout_lib.tlv`.
+
+**The marker.** The comment `// makerchip-tt: vga` in the Verilog marks a VGA design; `tt_vga()` emits it. For a
+marked design, the Makerchip extension's "Run TT Flow" button opens TT VGA and checks `info.yaml` for the VGA
+clock and pins; TT VGA notes a compile that isn't marked (it still runs it).
 
 The view runs the compile's Verilog as is, so the design source must suit both Makerchip and VGA Playground:
 

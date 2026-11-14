@@ -38,6 +38,7 @@ const setStatus = status => view.call('setStatus', status).catch(e => console.wa
 let playgroundReady = false;
 let currentId;   // The compile shown, or being loaded.
 let pendingLoad; // A load message waiting for the playground to be ready.
+let unmarked;    // The loaded compile lacks the VGA marker (see README.md, "Designs for TT VGA").
 
 view.on('theme', ({ dark }) => document.body.classList.toggle('dark', dark));
 view.on('compile-result', reflect);
@@ -58,8 +59,8 @@ window.addEventListener('message', ({ source, data }) => {
     // Its editor, which marks warnings, is hidden, so list them here (in the tooltip).
     const warnings = data.errors.filter(e => e.type === 'warning');
     note(!data.ok ? `VGA Playground could not build compile ${currentId}; see its messages.`
-      : warnings.length ? `Compile ${currentId}, with ${warnings.length} Verilator warning(s) (hover to see)`
-      : `Compile ${currentId}`,
+      : (warnings.length ? `Compile ${currentId}, with ${warnings.length} Verilator warning(s) (hover to see)`
+        : `Compile ${currentId}`) + (unmarked ? '. (Not marked as a VGA design, e.g. by tt_vga().)' : ''),
       warnings.map(e => `${e.file.replace(/^src\//, '')}:${e.line}: ${e.message}`).join('\n\n'));
     setStatus(!data.ok ? 'fail' : warnings.length ? 'warning' : 'success');
   }
@@ -79,7 +80,7 @@ function reflect({ which, id, success, resultsUrl, artifacts }) {
     } else if (!resultsUrl) {
       note('This compile\'s Verilog is not available to views.');
       setStatus('fail');
-    } else if (artifacts?.['top_gen.sv']) {
+    } else if (Object.keys(artifacts ?? {}).some(f => artifacts[f] && f.endsWith('_gen.sv'))) {
       // An include fragment, which VGA Playground would compile on its own.
       note('Add --inlineGen to the \\m5_TLV_version line, to generate a single Verilog file.');
       setStatus('fail');
@@ -92,7 +93,9 @@ function reflect({ which, id, success, resultsUrl, artifacts }) {
 /** Load a compile's Verilog, and the files it downloaded, into VGA Playground. */
 async function load(id, resultsUrl, artifacts) {
   note('Loading...');
-  const names = ['top.sv', ...Object.keys(artifacts ?? {}).filter(f => f.startsWith('sv_url_inc/'))];
+  // The generated Verilog (named for the top source file, e.g. top.sv), and any downloaded files.
+  const names = Object.keys(artifacts ?? {}).filter(f => artifacts[f] &&
+    (f.startsWith('sv_url_inc/') || f.endsWith('.sv') && !f.includes('/')));
   try {
     const texts = await Promise.all(names.map(async name => {
       const resp = await fetch(new URL(name, resultsUrl));
@@ -101,6 +104,7 @@ async function load(id, resultsUrl, artifacts) {
     }));
     if (id !== currentId) { return; }  // Superseded.
     // By base name: VGA Playground finds modules among all its files, and `include`s by name.
+    unmarked = !texts.some(t => /\/\/ makerchip-tt: vga\b/.test(t));
     const files = Object.fromEntries(names.map((name, i) => [name.split('/').pop(), texts[i]]));
     note('Building...');
     post({ type: 'vga-playground:load', id, files });
