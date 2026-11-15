@@ -14,7 +14,7 @@ anonymously, and its results from its GitHub Pages.
 
 | View | Page | Shows |
 |---|---|---|
-| TT Progress | `progress.html` | The commit's workflow runs, their jobs, and the steps in progress; then its published results: at a glance (`summary.json`: why a job failed, tests, precheck, layout metrics, a stale `.sv`), and every published file, each shown according to its type (logs with their errors marked, reports, JSON, CSV, Markdown, test results, images; PDFs and waveforms, via Surfer, by link). Also works in a browser tab: `progress.html?repo=<owner>/<name>`. |
+| TT Build | `progress.html` (its former name, TT Build) | The commit's workflow runs, their jobs, and the steps in progress; then its published results: at a glance (`summary.json`: why a job failed, tests, precheck, layout metrics, a stale `.sv`), and every published file, with a text search, each shown according to its type (logs with their errors marked, reports, JSON, CSV, Markdown, test results, images; PDFs and waveforms, via Surfer, by link). Also works in a browser tab: `progress.html?repo=<owner>/<name>`. |
 | TT Layout | `layout.html` | The layout from the project's Pages: the 2D render, TT's 3D viewer, Tiny Tapeout Explorer. |
 | TT VGA | `vga.html` | Each Makerchip compile's Verilog running live in [VGA Playground](https://github.com/stevehoover/vga-playground) (a fork, for its embedding API): the Tiny VGA PMOD display, inputs and audio. |
 
@@ -24,13 +24,13 @@ Each sets its tab status: working while its results are pending, then success, w
 
 - **Channel:** every view needs `rpc: true` (for `getContext` and `setStatus`; without it the IDE refuses every
   call). Their links open through the `openUrl` RPC, since a webview may block a view's own (e.g. VS Code's).
-- **`params`:** `{repo: "<owner>/<name>", sha?}`. Without `sha`, TT Progress follows the latest commit with runs.
+- **`params`:** `{repo: "<owner>/<name>", sha?}`. Without `sha`, TT Build follows the latest commit with runs.
 - **`tt/run-start` `{repo, sha}`** (subscribed by both): a commit was pushed; follow it.
 - **`tt/run-status` `{repo, sha, done, runs: [{name, status, conclusion, url, jobs: [{name, status,
-  conclusion}]}]}`** (produced by TT Progress, subscribed by TT Layout): emitted on each poll. TT Progress is the
+  conclusion}]}]}`** (produced by TT Build, subscribed by TT Layout): emitted on each poll. TT Build is the
   only poller of the GitHub API, whose anonymous limit is 60 requests/hour; it polls each minute until the runs
   complete.
-- **RPC `getRunStatus()`** on TT Progress (with `rpc: true`) returns the last `tt/run-status` payload.
+- **RPC `getRunStatus()`** on TT Build (with `rpc: true`) returns the last `tt/run-status` payload.
 - **TT VGA** subscribes to the IDE's `compile-result` and `theme` (`sources: ["ide"]`), and needs no `repo`. It
   loads the generated Verilog and the files under `sv_url_inc/` (as listed in `artifacts`) from each successful
   compile's `resultsUrl`. The page's `?playground=<url>` overrides the VGA Playground URL (e.g. a dev server's

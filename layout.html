@@ -67,7 +67,7 @@ view.on('tt/run-status', p => {
     note(`Layout of ${sha7}`);
     setStatus('success');
   } else {
-    note(`The gds workflow failed for ${sha7}; see TT Progress.`);
+    note(`The gds workflow failed for ${sha7}; see TT Build.`);
     setStatus('fail');
   }
 });

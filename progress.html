@@ -1,14 +1,15 @@
 <!doctype html>
 <!--
-  TT Progress: live status of a Tiny Tapeout project's GitHub Actions runs for one commit, then its results.
+  TT Build: live status of a Tiny Tapeout project's GitHub Actions runs for one commit, then its results.
   The single poller of the GitHub API (anonymous: 60 requests/hour), so it shares what it learns as `tt/run-status`
   for the other TT views. Once the runs finish, it summarizes their results (summary.json, on the project's GitHub
-  Pages) and lists every published file (manifest.json), showing each according to its type. See README.md.
+  Pages) and lists every published file (manifest.json), showing each according to its type, with a search of their
+  text. (Formerly "TT Progress"; the page keeps its name for existing openers.) See README.md.
 -->
 <html>
 <head>
 <meta charset="utf-8">
-<title>TT Progress</title>
+<title>TT Build</title>
 <style>
   body { font: 13px system-ui, sans-serif; margin: 0; color: #222; background: #fff; display: flex;
          flex-direction: column; height: 100vh; }
@@ -35,6 +36,8 @@
   #summary pre { background: #8881; padding: 6px; max-height: 16em; overflow: auto; }
   #file pre .error { background: #d332; }
   #file pre .warn { background: #b802; }
+  #file pre .hit, #file mark { background: #fd04; color: inherit; }
+  .hits { margin: 0 0 8px 1em; cursor: pointer; }
   table { border-collapse: collapse; }
   td, th { padding: 1px 10px 1px 0; text-align: left; vertical-align: top; }
   #file td, #file th { border: 1px solid #8884; padding: 2px 6px; }
@@ -47,6 +50,7 @@
 <div id="bar">
   <span id="head" class="muted">Waiting for a Tiny Tapeout project...</span>
   <input id="filter" placeholder="Filter files" size="14" hidden>
+  <input id="search" placeholder="Search text" size="14" hidden>
 </div>
 <div id="main">
   <div id="tree" hidden></div>
@@ -57,10 +61,11 @@
 <script>
 const POLL_MS = 60000;      // While runs are in progress. (Each poll costs 1 request, plus 1 per unfinished run.)
 const WAIT_MS = 15000;      // Until the pushed commit's runs appear.
-const PUBLISH_MS = 30000;   // Until the finished runs' results are published (no rate limit: GitHub Pages).
+const PUBLISH_MS = 30000;   // Once the runs finish, until GitHub Pages serves their results (no rate limit).
 const ICON = { success: '✅', failure: '❌', cancelled: '⛔', skipped: '⏭️', timed_out: '⌛' };
 const TEXT = /\.(txt|log|rpt|tcl|v|sv|vh|tlv|yaml|yml|cfg|sdc|lef|ext|py|sh|mk|toml|ini|gtkw|rcx|cdl|spice|drc|lvs)$/i;
-const MAX_TEXT = 3e6;       // Bytes of a text file to show.
+const MAX_TEXT = 3e6;       // Bytes of a text file to show (or search).
+const MAX_HITS = 500;       // Lines a search lists.
 // The summary's layout metrics (LibreLane's names), as shown.
 const METRICS = {
   design__instance__count__stdcell: ['Cells'],
@@ -89,6 +94,7 @@ const finishedJobs = new Map();  // run id -> jobs, once the run and its jobs co
 let status = null;               // The last `tt/run-status` payload.
 let resultsSha;                  // The commit whose results are shown (or being fetched).
 let manifest, summary, selected; // The published results, and the file shown (null: the overview).
+const texts = new Map();         // file -> its text (a promise), once fetched.
 
 // Links: a file of the results opens here; others open through the IDE, since a view's own links can't open
 // windows in every host (e.g. VS Code).
@@ -99,6 +105,7 @@ document.addEventListener('click', e => {
   a.dataset.file ? openFile(a.dataset.file) : openUrl(a.href);
 });
 $('filter').oninput = () => renderTree();
+$('search').onkeydown = e => { if (e.key === 'Enter') { search($('search').value); } };
 
 view.expose({ getRunStatus: () => status });
 view.on('theme', ({ dark }) => document.body.classList.toggle('dark', dark));
@@ -119,6 +126,7 @@ function track(newRepo, newSha) {
   const [owner, name] = repo.split('/');
   pages = `https://${owner.toLowerCase()}.github.io/${name}/`;
   manifest = summary = resultsSha = undefined;
+  texts.clear();
   $('summary').innerHTML = '';
   overview();
   clearTimeout(timer);
@@ -199,11 +207,14 @@ function render(runs) {
 
 // ---- The published results ----
 
-/** Fetch the commit's summary.json and manifest.json, waiting for the template's viewer job to publish them, then show them. */
+/**
+ * Fetch the commit's summary.json and manifest.json, then show them. Called once all the commit's runs have finished,
+ * so the template's viewer job (in gds) has already deployed them: wait (5 minutes) only for GitHub Pages to serve them.
+ */
 async function loadResults(gen) {
   $('summary').innerHTML = '<div class="muted">Waiting for the results to be published...</div>';
   const get = async file => (await fetch(`${pages}${file}?sha=${sha}&t=${Date.now()}`, { cache: 'no-store' })).json();
-  for (let tries = 0; tries < 40 && gen === generation; tries++) {
+  for (let tries = 0; tries < 10 && gen === generation; tries++) {
     try {
       const [m, s] = await Promise.all([get('manifest.json'), get('summary.json')]);
       if (gen !== generation) { return; }
@@ -216,7 +227,7 @@ async function loadResults(gen) {
     await new Promise(r => setTimeout(r, PUBLISH_MS));
   }
   if (gen === generation) {
-    $('summary').innerHTML = '<div class="muted">No results were published for this commit (see the viewer job of the gds workflow).</div>';
+    $('summary').innerHTML = '<div class="muted">GitHub Pages does not serve the results of this commit. See the viewer job of the gds workflow.</div>';
   }
 }
 
@@ -267,8 +278,8 @@ function renderTree() {
       ? `<span class="file${node[k] === selected ? ' selected' : ''}" data-file="${esc(node[k])}">${esc(k)}</span>`
       : `<details${filter || depth < 1 ? ' open' : ''}><summary>${esc(k)}</summary>${html(node[k], depth + 1)}</details>`)
     .join('');
-  $('tree').hidden = $('filter').hidden = !manifest;
-  $('tree').innerHTML = `<span class="file${selected ? '' : ' selected'}" data-overview="1">Progress</span>` + html(root, 0);
+  $('tree').hidden = $('filter').hidden = $('search').hidden = !manifest;
+  $('tree').innerHTML = `<span class="file${selected ? '' : ' selected'}" data-overview="1">Build</span>` + html(root, 0);
   $('tree').onclick = e => {
     const el = e.target.closest('.file');
     if (el?.dataset.overview) { overview(); } else if (el) { openFile(el.dataset.file); }
@@ -278,10 +289,16 @@ function renderTree() {
 // ---- The file viewer ----
 
 function overview() {
-  selected = null;
+  select(null);
   $('overview').hidden = false;
   $('file').hidden = true;
-  renderTree();
+}
+
+/** Mark `file` (null: the overview) as the one shown, leaving the tree as the user arranged it. */
+function select(file) {
+  selected = file;
+  $('tree').querySelectorAll('.file').forEach(el =>
+    el.classList.toggle('selected', file ? el.dataset.file === file : !!el.dataset.overview));
 }
 
 function pane(html) {
@@ -294,11 +311,11 @@ function pane(html) {
 const table = obj => `<table>${Object.entries(obj).map(([k, v]) =>
   `<tr><td>${esc(k)}</td><td>${esc(typeof v === 'object' ? JSON.stringify(v) : v)}</td></tr>`).join('')}</table>`;
 
-async function openFile(file) {
-  selected = file;
+/** Show `file` according to its type, or, for a search hit, as text with `query`'s lines marked, at line `line`. */
+async function openFile(file, query, line) {
+  select(file);
   $('overview').hidden = true;
   $('file').hidden = false;
-  renderTree();
   const url = pages + file, ext = (file.match(/\.([^./]+)$/)?.[1] ?? '').toLowerCase();
   const link = `<p class="muted"><a href="${esc(url)}">${esc(file)}</a></p>`;
   if (/^(png|jpe?g|gif|svg)$/.test(ext)) { return pane(`${link}<img src="${esc(url)}">`); }
@@ -312,11 +329,11 @@ async function openFile(file) {
   pane(`${link}<div class="muted">Loading...</div>`);
   let text;
   try {
-    text = await (await fetch(url)).text();
+    text = await fetchText(file);
   } catch (e) { return pane(`${link}<p class="error">Couldn't load it (${esc(e.message)}).</p>`); }
   if (selected !== file) { return; }
-  const cut = text.length > MAX_TEXT ? `<p class="warn">Showing the first ${MAX_TEXT / 1e6} MB.</p>` : '';
-  text = text.slice(0, MAX_TEXT);
+  const cut = text.length >= MAX_TEXT ? `<p class="warn">Showing the first ${MAX_TEXT / 1e6} MB.</p>` : '';
+  if (query) { return showText(link + cut, text, query, line); }
   if (ext === 'json') {
     try {
       const data = JSON.parse(text);
@@ -329,25 +346,95 @@ async function openFile(file) {
     return pane(`${link}<table>${rows.map(r => `<tr>${r.map(c => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</table>`);
   }
   if (ext === 'md') { return pane(link + markdown(text)); }
-  if (ext === 'xml' && /<testcase/.test(text)) { return pane(link + junit(text)); }
+  if (ext === 'xml' && /<testcase/.test(text)) {
+    return pane(`${link}${junit(text)}<details><summary>XML</summary><pre>${esc(text)}</pre></details>`);
+  }
   showText(link + cut, text);
 }
 
-/** Text, with error and warning lines highlighted and a list of the errors to jump to. */
-function showText(head, text) {
-  const cls = l => /##\[error\]|\b(ERROR|Error|FAILED|FAIL)\b|\berror:/.test(l) ? 'error'
+/**
+ * Text, with error and warning lines highlighted and a list of the errors to jump to; or, for a search, with `query`'s
+ * lines marked and a list of them, at line `line`.
+ */
+function showText(head, text, query, line) {
+  const cls = l => query ? (l.toLowerCase().includes(query) ? 'hit' : '')
+    : /##\[error\]|\b(ERROR|Error|FAILED|FAIL)\b|\berror:/.test(l) ? 'error'
     : /##\[warning\]|\b(WARNING|Warning)\b|\bwarning:/.test(l) ? 'warn' : '';
-  const errors = [];
-  const body = text.replace(/\x1b\[[\d;]*m/g, '').split('\n').map((l, i) => {  // (Without terminal colors.)
+  const marked = [];
+  const body = text.split('\n').map((l, i) => {
     const c = cls(l);
-    if (c === 'error') { errors.push(i); }
+    if (c === 'error' || c === 'hit') { marked.push(i); }
     return c ? `<span id="L${i}" class="${c}">${esc(l)}</span>` : esc(l);
   }).join('\n');
-  const jumps = errors.length ? `<div id="jumps">${errors.length} error line(s): ${errors.slice(0, 50)
-    .map(i => `<span class="link" data-line="${i}"><u>${i + 1}</u></span>`).join(' ')}</div>` : '';
+  const jumps = marked.length ? `<div id="jumps">${marked.length} ${query ? 'match' : 'error'} line(s): ${marked
+    .slice(0, 50).map(i => `<span class="link" data-line="${i}"><u>${i + 1}</u></span>`).join(' ')}</div>` : '';
   const p = pane(`${head}${jumps}<pre>${body}</pre>`);
   p.querySelectorAll('[data-line]').forEach(a => a.onclick = () => $('L' + a.dataset.line).scrollIntoView({ block: 'center' }));
-  if (errors.length) { $('L' + errors[0]).scrollIntoView({ block: 'center' }); }
+  const first = line ?? marked[0];
+  if (first !== undefined) { $('L' + first)?.scrollIntoView({ block: 'center' }); }
+}
+
+/** A published file's text (its first MAX_TEXT characters, without terminal colors), fetched once. */
+function fetchText(file) {
+  if (!texts.has(file)) {
+    texts.set(file, fetch(pages + file).then(r => {
+      if (!r.ok) { throw new Error(`HTTP ${r.status}`); }
+      return r.text();
+    }).then(t => t.slice(0, MAX_TEXT).replace(/\x1b\[[\d;]*m/g, '')));
+    texts.get(file).catch(() => texts.delete(file));  // (Retry next time.)
+  }
+  return texts.get(file);
+}
+
+const isText = file => TEXT.test(file) || /\.(json|csv|md|xml|html)$/i.test(file) || !/\.[^./]+$/.test(file);
+
+/** List the lines of the published text files that contain `query` (ignoring case). */
+async function search(query) {
+  query = query.trim().toLowerCase();
+  if (!query || !manifest) { return; }
+  select(null);
+  $('overview').hidden = true;
+  $('file').hidden = false;
+  const files = manifest.files.filter(isText);
+  const hits = [];  // [file, [[line, text], ...]]
+  let done = 0, count = 0;
+  const show = () => {
+    if ($('search').value.trim().toLowerCase() !== query) { return; }  // (Superseded.)
+    pane(`<p class="muted">${count >= MAX_HITS ? `The first ${MAX_HITS} lines` : `${count} line(s)`} containing
+      "${esc(query)}"${done < files.length ? `, searching ${done}/${files.length} files...` : ` in ${files.length} files.`}</p>` +
+      hits.map(([file, lines]) => `<div><b>${esc(file)}</b></div><div class="hits">${lines.map(([i, l]) =>
+        `<div data-file="${esc(file)}" data-hit="${i}">${i + 1}: ${mark(l, query)}</div>`).join('')}</div>`).join(''));
+    $('file').querySelectorAll('[data-hit]').forEach(el =>
+      el.onclick = () => openFile(el.dataset.file, query, +el.dataset.hit));
+  };
+  show();
+  // A few files at a time, showing the hits as they come.
+  let next = 0;
+  await Promise.all(Array.from({ length: 8 }, async () => {
+    while (next < files.length && count < MAX_HITS) {
+      const file = files[next++];
+      const text = await fetchText(file).catch(() => '');
+      const lines = [];
+      text.split('\n').forEach((l, i) => {
+        if (count < MAX_HITS && l.toLowerCase().includes(query)) { lines.push([i, l.slice(0, 300)]); count++; }
+      });
+      if (lines.length) { hits.push([file, lines]); }
+      done++;
+      if (lines.length || done % 50 === 0) { show(); }
+    }
+  }));
+  done = files.length;
+  show();
+}
+
+/** `line`, HTML-escaped, with `query`'s occurrences marked. */
+function mark(line, query) {
+  const lower = line.toLowerCase();
+  let out = '', at = 0;
+  for (let i; (i = lower.indexOf(query, at)) >= 0; at = i + query.length) {
+    out += esc(line.slice(at, i)) + `<mark>${esc(line.slice(i, i + query.length))}</mark>`;
+  }
+  return out + esc(line.slice(at));
 }
 
 function junit(text) {
