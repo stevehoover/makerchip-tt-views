@@ -216,7 +216,7 @@ async function loadResults(gen) {
     await new Promise(r => setTimeout(r, PUBLISH_MS));
   }
   if (gen === generation) {
-    $('summary').innerHTML = '<div class="muted">No results were published for this commit (see the gds workflow's viewer job).</div>';
+    $('summary').innerHTML = '<div class="muted">No results were published for this commit (see the viewer job of the gds workflow).</div>';
   }
 }
 
@@ -240,12 +240,13 @@ function showSummary() {
     <table>
       ${tests('Tests (RTL)', s.tests.rtl)}${tests('Tests (gate level)', s.tests.gl)}${tests('Precheck', s.precheck)}
       ${metrics}
-      ${s.tiles ? `<tr><td>Tiles</td><td>${esc(s.tiles)} (${esc(s.pdk ?? '')})</td></tr>` : ''}
+      ${s.tiles ? `<tr><td>Tiles</td><td>${esc(s.tiles)}${s.pdk ? ` (${esc(s.pdk)})` : ''}</td></tr>` : ''}
       ${s.datasheet ? `<tr><td>Datasheet</td><td><a href="${pages}${s.datasheet}">PDF</a></td></tr>` : ''}
     </table>
     <p class="muted">Every published file is listed at the left. Not published: the tools' binary databases
       (${Object.entries(manifest.omitted ?? {}).map(([ext, o]) => `${o.files} ${ext}`).join(', ') || 'none'}),
       which are in the runs' artifacts on GitHub.</p>`;
+  $('summary').querySelectorAll('pre').forEach(pre => { pre.scrollTop = pre.scrollHeight; });  // (Nearest the error.)
   if (stale.length && !s.failures.length) { setStatus('warning'); }
 }
 

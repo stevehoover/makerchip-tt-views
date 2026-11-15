@@ -67,18 +67,19 @@ What a new view can read. TT's workflows (`gds`, `test`, `docs`) all run on push
 
 ### GitHub Pages
 
-tt-makerchip-template replaces TT's `viewer` job (in `gds`) with one that publishes, for the default branch's latest
-commit, once the rest of `gds` (with or without a layout) and the commit's `test` and `docs` runs have finished:
+tt-makerchip-template's `viewer` job (in `gds`) publishes the following, once the rest of `gds` (with or without a
+layout) and the commit's `test` and `docs` runs have finished:
 
-- TT's viewer files, as its `viewer` job lays them out.
+- TT's viewer files, from its viewer action, when there is a layout.
 - `runs/<workflow>/<artifact>/...`: every artifact of the commit's latest `gds`, `test` and `docs` runs, unzipped,
   except the tools' binary databases (`.odb`, `.gds`, `.oas`, `.mag`, `.def`, `.sdf`, `.spef`, `.lib`), which only
   EDA tools read; the final layout is TT's `tinytapeout.{gds,oas}`.
 - `runs/<workflow>/logs/<job>.txt`: each completed job's log.
 - `manifest.json`: `{sha, published, pdk, runs, sv, omitted, files}`, where `pdk` is `tt_submission/pdk.json`
   (PDK and tool versions), `runs.<workflow>` is `{id, url, status, conclusion, jobs: [{name, status, conclusion,
-  url, log, failed_steps}], artifacts}` (for `gds`, the jobs before `viewer`), `sv` lists each `src/*.sv` as `{sv, tlv, fresh, vga}`, `omitted` counts
-  the files left out, by extension (`{files, bytes}`), and `files` lists every file.
+  url, log, failed_steps}], artifacts}` (for `gds`, the jobs before `viewer`), `sv` lists each `src/*.sv` as
+  `{sv, tlv, fresh, vga}`, `omitted` counts the files left out, by extension (`{files, bytes}`), and `files` lists
+  every file but TT's viewer files.
 - `summary.json`: the results at a glance, `{sha, pdk, tiles, runs: {<workflow>: {conclusion, url}}, metrics,
   tests: {rtl, gl}, precheck, failures, sv, datasheet}`. `metrics` are key LibreLane metrics of the final layout,
   by their LibreLane names. `tests.rtl`, `tests.gl` and `precheck` are JUnit results as `{tests, failed, skipped,

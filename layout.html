@@ -54,7 +54,9 @@ view.on('tt/run-status', p => {
   const built = gds.jobs.find(j => j.name === 'gds')?.conclusion === 'success' && viewer?.conclusion === 'success';
   const finished = gds.status === 'completed' && gds.jobs.every(j => j.status === 'completed');
   if (!built && !finished) {
-    note(`Building the layout of ${sha7}...`);
+    note(gds.jobs.find(j => j.name === 'gds')?.conclusion === 'success'
+      ? `Built the layout of ${sha7}; it is published once precheck and the gate-level test finish...`
+      : `Building the layout of ${sha7}...`);
     setStatus('working');
   } else if (built) {
     if (shownSha !== p.sha) {
