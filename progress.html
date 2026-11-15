@@ -2,7 +2,8 @@
 <!--
   TT Progress: live status of a Tiny Tapeout project's GitHub Actions runs for one commit.
   The single poller of the GitHub API (anonymous: 60 requests/hour), so it shares what it learns
-  as `tt/run-status` for the other TT views. See README.md.
+  as `tt/run-status` for the other TT views. Once the runs finish, it summarizes their results (summary.json, on
+  the project's GitHub Pages), and opens its companions, TT Results and TT Datasheet. See README.md.
 -->
 <html>
 <head>
@@ -18,16 +19,25 @@
   .run > .name { font-weight: bold; }
   .job { margin-left: 1.5em; }
   .step { margin-left: 3em; opacity: 0.75; }
+  .warn { color: #b80; }
+  #summary { margin-top: 12px; border-top: 1px solid #8884; padding-top: 8px; }
+  #summary h4 { margin: 10px 0 4px; }
+  #summary pre { font-size: 12px; background: #8881; padding: 6px; overflow-x: auto; max-height: 16em; }
+  #summary table { border-collapse: collapse; }
+  #summary td { padding: 1px 10px 1px 0; }
 </style>
 </head>
 <body>
 <div id="head" class="muted">Waiting for a Tiny Tapeout project...</div>
 <div id="runs"></div>
 <div id="error" class="error"></div>
+<div id="summary"></div>
 <script src="https://cdn.jsdelivr.net/npm/@rweda/makerchip-view-client@0.2/dist/index.global.js"></script>
 <script>
 const POLL_MS = 60000;      // While runs are in progress. (Each poll costs 1 request, plus 1 per unfinished run.)
 const WAIT_MS = 15000;      // Until the pushed commit's runs appear.
+const SUMMARY_MS = 30000;   // Until the finished runs' summary.json is published (no rate limit: GitHub Pages).
+const VIEWS_URL = 'https://stevehoover.github.io/makerchip-tt-views/';  // For companions opened without the IDE.
 const ICON = { success: '✅', failure: '❌', cancelled: '⛔', skipped: '⏭️', timed_out: '⌛' };
 
 const view = MakerchipView.connect();
@@ -37,6 +47,16 @@ let repo, sha, timer;
 let generation = 0;              // Bumped by track(), so only the latest poll loop runs and renders.
 const finishedJobs = new Map();  // run id -> jobs, once the run and its jobs complete (they no longer change).
 let status = null;               // The last `tt/run-status` payload.
+let summarySha;                  // The commit whose summary is shown (or being fetched).
+const openedResults = new Set(); // Commits for which a failure opened TT Results.
+
+// Open links through the IDE: a view's own links can't open windows in every host (e.g. VS Code).
+document.addEventListener('click', e => {
+  const a = e.target.closest('a[href^="http"]');
+  if (!a) { return; }
+  e.preventDefault();
+  view.call('openUrl', a.href).catch(() => window.open(a.href, '_blank'));
+});
 
 view.expose({ getRunStatus: () => status });
 view.on('theme', ({ dark }) => document.body.classList.toggle('dark', dark));
@@ -93,12 +113,82 @@ async function poll(gen) {
     view.emit('tt/run-status', status);
     render(runs);
     document.getElementById('error').textContent = '';
-    if (done) { return; }
+    if (done) {
+      if (summarySha !== sha) { summarySha = sha; loadSummary(gen); }
+      return;
+    }
+    if (summarySha !== sha) { document.getElementById('summary').innerHTML = ''; }
     if (runs.length === 0) { delay = WAIT_MS; }
   } catch (e) {
     document.getElementById('error').textContent = e.message;
   }
   if (gen === generation) { timer = setTimeout(() => poll(gen), delay); }
+}
+
+function pagesUrl() {
+  const [owner, name] = repo.split('/');
+  return `https://${owner.toLowerCase()}.github.io/${name}/`;
+}
+
+/** Fetch the commit's summary.json from GitHub Pages, waiting for makerchip.yaml to publish it, then show it. */
+async function loadSummary(gen) {
+  document.getElementById('summary').innerHTML = '<div class="muted">Waiting for the results to be published...</div>';
+  for (let tries = 0; tries < 40 && gen === generation; tries++) {
+    try {
+      const resp = await fetch(`${pagesUrl()}summary.json?sha=${sha}&t=${Date.now()}`, { cache: 'no-store' });
+      const summary = resp.ok ? await resp.json() : null;
+      if (gen !== generation) { return; }
+      if (summary?.sha === sha) { return showSummary(summary); }
+    } catch { /* (Not published yet.) */ }
+    await new Promise(r => setTimeout(r, SUMMARY_MS));
+  }
+  if (gen === generation) {
+    document.getElementById('summary').innerHTML =
+      '<div class="muted">No results were published for this commit (see the makerchip workflow).</div>';
+  }
+}
+
+const esc = text => String(text).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+
+function showSummary(s) {
+  const tests = t => t ? `${t.tests - t.failed - t.skipped}/${t.tests} passed` : 'none';
+  const m = s.metrics ?? {};
+  const metric = (label, key, fmt = v => v) => key in m ? `<tr><td>${label}</td><td>${esc(fmt(m[key]))}</td></tr>` : '';
+  const stale = s.sv.filter(f => f.fresh === false);
+  const failed = s.failures.length > 0;
+  document.getElementById('summary').innerHTML = `
+    <button id="open-results">Results</button>
+    ${s.datasheet ? '<button id="open-datasheet">Datasheet</button>' : ''}
+    ${stale.map(f => `<div class="warn">⚠️ ${esc(f.sv)} wasn't generated from the committed ${esc(f.tlv)}, so these
+      results may not reflect it. (Run TT Flow regenerates it.)</div>`).join('')}
+    ${s.failures.map(f => `
+      <h4 class="error">❌ ${esc(f.run)} / ${esc(f.job)}${f.steps.length ? `: ${esc(f.steps.join(', '))}` : ''}</h4>
+      <pre>${esc((f.errors?.length ? f.errors : f.context ?? []).join('\n'))}</pre>
+      ${f.log ? `<a href="${pagesUrl()}${f.log}" target="_blank">Full log</a>` : ''}`).join('')}
+    <h4>Results</h4>
+    <table>
+      <tr><td>Tests (RTL)</td><td>${tests(s.tests.rtl)}</td></tr>
+      <tr><td>Tests (gate level)</td><td>${tests(s.tests.gl)}</td></tr>
+      <tr><td>Precheck</td><td>${tests(s.precheck)}</td></tr>
+      ${metric('Cells', 'design__instance__count__stdcell')}
+      ${metric('Utilization', 'design__instance__utilization', v => `${(v * 100).toFixed(1)}%`)}
+      ${metric('Setup slack', 'timing__setup__ws', v => `${v.toFixed(2)} ns`)}
+      ${metric('Hold slack', 'timing__hold__ws', v => `${v.toFixed(2)} ns`)}
+      ${s.tiles ? `<tr><td>Tiles</td><td>${esc(s.tiles)} (${esc(s.pdk ?? '')})</td></tr>` : ''}
+    </table>`;
+  document.getElementById('open-results').onclick = () => openCompanion('TT Results', `results.html?repo=${repo}`);
+  const datasheet = document.getElementById('open-datasheet');
+  if (datasheet) { datasheet.onclick = () => openCompanion('TT Datasheet', null, pagesUrl() + s.datasheet); }
+  if (stale.length && !failed) { setStatus('warning'); }
+  if (failed && !openedResults.has(s.sha)) {
+    openedResults.add(s.sha);
+    view.call('openCompanion', 'TT Results').catch(() => {});  // (Not in a browser tab; that's for a click.)
+  }
+}
+
+/** Open one of this view's companions (see README.md), or, without them (e.g. outside the IDE), its page. */
+function openCompanion(mnemonic, page, url = VIEWS_URL + page) {
+  view.call('openCompanion', mnemonic).catch(() => view.call('openUrl', url).catch(() => window.open(url, '_blank')));
 }
 
 function icon(item) {

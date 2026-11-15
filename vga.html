@@ -33,6 +33,13 @@ const playground = document.getElementById('playground');
 playground.src = new URLSearchParams(location.search).get('playground') ?? PLAYGROUND_URL;
 
 const view = MakerchipView.connect();
+// Open links through the IDE: a view's own links can't open windows in every host (e.g. VS Code).
+document.addEventListener('click', e => {
+  const a = e.target.closest('a[href^="http"]');
+  if (!a) { return; }
+  e.preventDefault();
+  view.call('openUrl', a.href).catch(() => window.open(a.href, '_blank'));
+});
 // Tab status. Needs `rpc: true` in the opener's channel, like every call to the IDE.
 const setStatus = status => view.call('setStatus', status).catch(e => console.warn('TT VGA: setStatus:', e));
 let playgroundReady = false;

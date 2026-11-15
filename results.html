@@ -1,0 +1,266 @@
+<!doctype html>
+<!--
+  TT Results: browse what a Tiny Tapeout project's runs published to its GitHub Pages (by tt-makerchip-template's
+  makerchip.yaml): a summary of the results, and every file, shown according to its type. Opens on a failure's log.
+  A companion of TT Progress, which also emits the `tt/run-status` it follows. See README.md.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>TT Results</title>
+<style>
+  body { font: 13px system-ui, sans-serif; margin: 0; color: #222; background: #fff; display: flex; flex-direction: column;
+         height: 100vh; }
+  body.dark { color: #ddd; background: #1e1e1e; }
+  a { color: inherit; }
+  .muted { opacity: 0.6; }
+  .error { color: #d33; }
+  .warn { color: #b80; }
+  #bar { display: flex; gap: 8px; align-items: center; padding: 4px 8px; border-bottom: 1px solid #8884; }
+  #note { flex: 1; }
+  #main { flex: 1; display: flex; min-height: 0; }
+  #tree { width: 30%; min-width: 180px; overflow: auto; padding: 4px 8px; border-right: 1px solid #8884; }
+  #tree details { margin-left: 10px; }
+  #tree summary { cursor: pointer; }
+  #tree .file { display: block; margin-left: 22px; cursor: pointer; white-space: nowrap; }
+  #tree .file.selected { font-weight: bold; }
+  #pane { flex: 1; overflow: auto; padding: 8px; }
+  #pane pre { font-size: 12px; margin: 0; white-space: pre-wrap; word-break: break-all; }
+  #pane pre .error { background: #d332; }
+  #pane pre .warn { background: #b802; }
+  #pane table { border-collapse: collapse; }
+  #pane td, #pane th { border: 1px solid #8884; padding: 2px 6px; text-align: left; vertical-align: top; }
+  #pane img { max-width: 100%; }
+  #jumps { margin-bottom: 6px; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <span id="note" class="muted">Waiting for a Tiny Tapeout project...</span>
+  <input id="filter" placeholder="Filter files" size="16">
+</div>
+<div id="main"><div id="tree"></div><div id="pane"></div></div>
+<script src="https://cdn.jsdelivr.net/npm/@rweda/makerchip-view-client@0.2/dist/index.global.js"></script>
+<script>
+const TEXT = /\.(txt|log|rpt|tcl|v|sv|vh|tlv|yaml|yml|cfg|sdc|lef|ext|py|sh|mk|toml|ini|gtkw|rcx|cdl|spice|drc|lvs)$/i;
+const MAX_TEXT = 3e6;  // Bytes of a text file to show.
+const view = MakerchipView.connect();
+const setStatus = status => view.call('setStatus', status).catch(() => {});
+const esc = text => String(text).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+let repo, sha, pages, manifest, summary, selected;
+let generation = 0;
+
+// Open links through the IDE: a view's own links can't open windows in every host (e.g. VS Code).
+document.addEventListener('click', e => {
+  const a = e.target.closest('a[href^="http"]');
+  if (!a) { return; }
+  e.preventDefault();
+  openUrl(a.href);
+});
+const openUrl = url => view.call('openUrl', url).catch(() => window.open(url, '_blank'));
+
+view.on('theme', ({ dark }) => document.body.classList.toggle('dark', dark));
+view.on('tt/run-start', p => { if (p.repo === repo) { sha = p.sha; note(`Waiting for the results of ${sha.slice(0, 7)}...`); setStatus('working'); } });
+view.on('tt/run-status', p => { if (p.repo === repo && p.done && (p.sha !== manifest?.sha)) { sha = p.sha; load(); } });
+const query = new URLSearchParams(location.search);
+view.call('getContext').then(ctx => {
+  document.body.classList.toggle('dark', ctx.theme.dark);
+  start(ctx.params?.repo ?? query.get('repo'));
+}).catch(() => start(query.get('repo')));  // (Outside the IDE.)
+document.getElementById('filter').oninput = () => renderTree();
+
+function start(r) {
+  if (!r) { return note('No repository given (params.repo, or ?repo=owner/name).'); }
+  repo = r;
+  const [owner, name] = repo.split('/');
+  pages = `https://${owner.toLowerCase()}.github.io/${name}/`;
+  load();
+}
+
+function note(text) { document.getElementById('note').textContent = text; }
+
+/** Load the published manifest and summary, retrying until they are for `sha` (if given). */
+async function load() {
+  const gen = ++generation;
+  for (let tries = 0; tries < 40 && gen === generation; tries++) {
+    try {
+      const get = async file => (await fetch(`${pages}${file}?t=${Date.now()}`, { cache: 'no-store' })).json();
+      const [m, s] = await Promise.all([get('manifest.json'), get('summary.json').catch(() => null)]);
+      if (gen !== generation) { return; }
+      if (!sha || m.sha === sha) {
+        manifest = m; summary = s?.sha === m.sha ? s : null; sha = m.sha;
+        return show();
+      }
+    } catch { /* (Not published yet.) */ }
+    note(`Waiting for the results of ${sha ? sha.slice(0, 7) : 'the latest commit'} to be published...`);
+    await new Promise(r => setTimeout(r, 30000));
+  }
+}
+
+function show() {
+  note(`${repo} at ${sha.slice(0, 7)}, published ${new Date(manifest.published).toLocaleString()}`);
+  const failed = summary?.failures?.length > 0;
+  setStatus(failed ? 'fail' : summary?.sv?.some(f => f.fresh === false) ? 'warning' : 'success');
+  renderTree();
+  const failure = summary?.failures?.find(f => f.log);
+  failure ? openFile(failure.log) : overview();
+}
+
+// ---- The file tree ----
+
+function renderTree() {
+  const filter = document.getElementById('filter').value.toLowerCase();
+  const root = {};
+  for (const file of manifest?.files ?? []) {
+    if (filter && !file.toLowerCase().includes(filter)) { continue; }
+    let node = root;
+    const parts = file.split('/');
+    parts.slice(0, -1).forEach(p => { node = node[p + '/'] ??= {}; });
+    node[parts.at(-1)] = file;
+  }
+  const html = (node, depth) => Object.keys(node).sort((a, b) => (b.endsWith('/') - a.endsWith('/')) || a.localeCompare(b))
+    .map(k => typeof node[k] === 'string'
+      ? `<span class="file${node[k] === selected ? ' selected' : ''}" data-file="${esc(node[k])}">${esc(k)}</span>`
+      : `<details${filter || depth < 1 ? ' open' : ''}><summary>${esc(k)}</summary>${html(node[k], depth + 1)}</details>`)
+    .join('');
+  const tree = document.getElementById('tree');
+  tree.innerHTML = `<span class="file" data-overview="1">Summary</span>` + html(root, 0);
+  tree.onclick = e => {
+    const el = e.target.closest('.file');
+    if (el?.dataset.overview) { overview(); } else if (el) { openFile(el.dataset.file); }
+  };
+}
+
+// ---- The viewer ----
+
+function pane(html) { const p = document.getElementById('pane'); p.innerHTML = html; p.scrollTop = 0; return p; }
+
+function overview() {
+  selected = null; renderTree();
+  if (!summary) { return pane('<div class="muted">No summary was published for this commit.</div>'); }
+  const s = summary;
+  const cases = (label, t) => !t ? '' : `<h3>${label}: ${t.tests - t.failed - t.skipped}/${t.tests} passed</h3>
+    <table>${t.cases.map(c => `<tr><td>${c.status === 'passed' ? '✅' : c.status === 'skipped' ? '⏭️' : '❌'}</td>
+      <td>${esc(c.name)}</td><td>${esc(c.message ?? '')}</td></tr>`).join('')}</table>`;
+  pane(`
+    ${s.sv.filter(f => f.fresh === false).map(f => `<p class="warn">⚠️ ${esc(f.sv)} wasn't generated from the
+      committed ${esc(f.tlv)}, so these results may not reflect it.</p>`).join('')}
+    ${s.failures.map(f => `<h3 class="error">❌ ${esc(f.run)} / ${esc(f.job)}${f.steps.length ? `: ${esc(f.steps.join(', '))}` : ''}</h3>
+      <pre>${esc((f.context ?? []).join('\n'))}</pre>${f.log ? `<p><a href="#" data-file="${esc(f.log)}">Full log</a></p>` : ''}`).join('')}
+    <h3>Runs</h3><table>${Object.entries(s.runs).map(([n, r]) =>
+      `<tr><td>${r.conclusion === 'success' ? '✅' : '❌'}</td><td><a href="${esc(r.url)}">${esc(n)}</a></td></tr>`).join('')}</table>
+    ${cases('Tests (RTL)', s.tests.rtl)}${cases('Tests (gate level)', s.tests.gl)}${cases('Precheck', s.precheck)}
+    ${s.metrics ? `<h3>Layout</h3>${table(s.metrics)}` : ''}
+    ${s.datasheet ? `<p><button id="datasheet">Datasheet</button></p>` : ''}
+    <p class="muted">Not published: the tools' binary databases (${Object.entries(manifest.omitted ?? {})
+      .map(([ext, o]) => `${o.files} ${ext}`).join(', ') || 'none'}), which are in the runs' artifacts on GitHub.</p>`);
+  document.getElementById('pane').onclick = e => {
+    const link = e.target.closest('[data-file]');
+    if (link) { e.preventDefault(); openFile(link.dataset.file); }
+  };
+  const ds = document.getElementById('datasheet');
+  if (ds) { ds.onclick = () => openDatasheet(); }
+}
+
+function openDatasheet() {
+  view.call('openCompanion', 'TT Datasheet').catch(() => openUrl(pages + summary.datasheet));
+}
+
+const table = obj => `<table>${Object.entries(obj).map(([k, v]) =>
+  `<tr><td>${esc(k)}</td><td>${esc(typeof v === 'object' ? JSON.stringify(v) : v)}</td></tr>`).join('')}</table>`;
+
+async function openFile(file) {
+  selected = file; renderTree();
+  const url = pages + file, ext = (file.match(/\.([^./]+)$/)?.[1] ?? '').toLowerCase();
+  const link = `<p class="muted"><a href="${esc(url)}">${esc(file)}</a></p>`;
+  if (/^(png|jpe?g|gif|svg)$/.test(ext)) { return pane(`${link}<img src="${esc(url)}">`); }
+  if (ext === 'pdf') {
+    pane(`${link}<button id="pdf">Open</button>`);
+    document.getElementById('pdf').onclick = () => file === summary?.datasheet ? openDatasheet() : openUrl(url);
+    return;
+  }
+  if (ext === 'fst' || ext === 'vcd') {
+    return pane(`${link}<p>A waveform: <a href="https://app.surfer-project.org/?load_url=${encodeURIComponent(url)}">open in Surfer</a>.</p>`);
+  }
+  if (!['json', 'csv', 'md', 'xml', 'html'].includes(ext) && !TEXT.test(file) && ext !== '') {
+    return pane(`${link}<p>No preview for this file type; follow the link to download it.</p>`);
+  }
+  pane(`${link}<div class="muted">Loading...</div>`);
+  let text;
+  try {
+    const resp = await fetch(url);
+    text = await resp.text();
+  } catch (e) { return pane(`${link}<p class="error">Couldn't load it (${esc(e.message)}).</p>`); }
+  if (selected !== file) { return; }
+  const cut = text.length > MAX_TEXT ? `<p class="warn">Showing the first ${MAX_TEXT / 1e6} MB.</p>` : '';
+  text = text.slice(0, MAX_TEXT);
+  if (ext === 'json') {
+    try {
+      const data = JSON.parse(text);
+      const flat = data && typeof data === 'object' && !Array.isArray(data) && Object.values(data).every(v => typeof v !== 'object' || v === null);
+      return pane(link + (flat ? table(data) : `<pre>${esc(JSON.stringify(data, null, 1))}</pre>`));
+    } catch { /* (Shown as text.) */ }
+  }
+  if (ext === 'csv') {
+    const rows = text.trim().split('\n').map(r => r.split(','));
+    return pane(`${link}<table>${rows.map(r => `<tr>${r.map(c => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</table>`);
+  }
+  if (ext === 'md') { return pane(link + markdown(text)); }
+  if (ext === 'xml' && /<testcase/.test(text)) { return pane(link + junit(text)); }
+  showText(link + cut, text);
+}
+
+/** Text, with error and warning lines highlighted and a list of the errors to jump to. */
+function showText(head, text) {
+  const lines = text.split('\n');
+  const cls = l => /##\[error\]|\b(ERROR|Error|FAILED|FAIL)\b|\berror:/.test(l) ? 'error'
+    : /##\[warning\]|\b(WARNING|Warning)\b|\bwarning:/.test(l) ? 'warn' : '';
+  const errors = [];
+  const body = lines.map((l, i) => {
+    const c = cls(l);
+    if (c === 'error') { errors.push(i); }
+    return c ? `<span id="L${i}" class="${c}">${esc(l)}</span>` : esc(l);
+  }).join('\n');
+  const jumps = errors.length ? `<div id="jumps">${errors.length} error line(s): ${errors.slice(0, 50)
+    .map(i => `<a href="#L${i}" data-line="${i}">${i + 1}</a>`).join(' ')}</div>` : '';
+  const p = pane(`${head}${jumps}<pre>${body}</pre>`);
+  p.querySelectorAll('[data-line]').forEach(a => a.onclick = e => {
+    e.preventDefault(); e.stopPropagation(); document.getElementById('L' + a.dataset.line).scrollIntoView({ block: 'center' });
+  });
+  if (errors.length) { document.getElementById('L' + errors[0]).scrollIntoView({ block: 'center' }); }
+}
+
+function junit(text) {
+  const doc = new DOMParser().parseFromString(text, 'text/xml');
+  return `<table>${[...doc.getElementsByTagName('testcase')].map(c => {
+    const bad = c.querySelector('failure, error'), skipped = c.querySelector('skipped');
+    return `<tr><td>${bad ? '❌' : skipped ? '⏭️' : '✅'}</td><td>${esc(c.getAttribute('name'))}</td>
+      <td>${esc(bad?.getAttribute('message') ?? bad?.textContent ?? '')}</td></tr>`;
+  }).join('')}</table>`;
+}
+
+/** A little Markdown: headings, tables, lists, links, code, and paragraphs. */
+function markdown(text) {
+  const inline = s => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+    .replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '<a href="$2">$1</a>');
+  const out = [];
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (/^#{1,6} /.test(l)) { const n = l.match(/^#+/)[0].length; out.push(`<h${n}>${inline(l.slice(n + 1))}</h${n}>`); }
+    else if (/^\|/.test(l)) {
+      const rows = [];
+      for (; i < lines.length && /^\|/.test(lines[i]); i++) {
+        if (!/^\|[\s:|-]+\|$/.test(lines[i])) { rows.push(lines[i].split('|').slice(1, -1).map(c => inline(c.trim()))); }
+      }
+      i--;
+      out.push(`<table>${rows.map((r, j) => `<tr>${r.map(c => j ? `<td>${c}</td>` : `<th>${c}</th>`).join('')}</tr>`).join('')}</table>`);
+    }
+    else if (/^\s*[-*] /.test(l)) { out.push(`<li>${inline(l.replace(/^\s*[-*] /, ''))}</li>`); }
+    else if (l.trim()) { out.push(`<p>${inline(l)}</p>`); }
+  }
+  return out.join('\n');
+}
+</script>
+</body>
+</html>
