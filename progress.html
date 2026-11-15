@@ -1,77 +1,126 @@
 <!doctype html>
 <!--
-  TT Progress: live status of a Tiny Tapeout project's GitHub Actions runs for one commit.
-  The single poller of the GitHub API (anonymous: 60 requests/hour), so it shares what it learns
-  as `tt/run-status` for the other TT views. Once the runs finish, it summarizes their results (summary.json, on
-  the project's GitHub Pages), and opens its companions, TT Results and TT Datasheet. See README.md.
+  TT Progress: live status of a Tiny Tapeout project's GitHub Actions runs for one commit, then its results.
+  The single poller of the GitHub API (anonymous: 60 requests/hour), so it shares what it learns as `tt/run-status`
+  for the other TT views. Once the runs finish, it summarizes their results (summary.json, on the project's GitHub
+  Pages) and lists every published file (manifest.json), showing each according to its type. See README.md.
 -->
 <html>
 <head>
 <meta charset="utf-8">
 <title>TT Progress</title>
 <style>
-  body { font: 13px system-ui, sans-serif; margin: 8px; color: #222; background: #fff; }
+  body { font: 13px system-ui, sans-serif; margin: 0; color: #222; background: #fff; display: flex;
+         flex-direction: column; height: 100vh; }
   body.dark { color: #ddd; background: #1e1e1e; }
   a { color: inherit; }
+  h4 { margin: 10px 0 4px; }
   .muted { opacity: 0.6; }
   .error { color: #d33; }
+  .warn { color: #b80; }
+  #bar { display: flex; gap: 8px; align-items: center; padding: 4px 8px; border-bottom: 1px solid #8884; }
+  #head { flex: 1; }
+  #main { flex: 1; display: flex; min-height: 0; }
+  #tree { width: 30%; min-width: 150px; overflow: auto; padding: 4px 8px; border-right: 1px solid #8884; }
+  #tree details { margin-left: 10px; }
+  #tree summary { cursor: pointer; }
+  #tree .file { display: block; margin-left: 22px; cursor: pointer; white-space: nowrap; }
+  #tree .file.selected { font-weight: bold; }
+  #overview, #file { flex: 1; overflow: auto; padding: 8px; }
   .run { margin: 0 0 10px; }
   .run > .name { font-weight: bold; }
   .job { margin-left: 1.5em; }
   .step { margin-left: 3em; opacity: 0.75; }
-  .warn { color: #b80; }
-  #summary { margin-top: 12px; border-top: 1px solid #8884; padding-top: 8px; }
-  #summary h4 { margin: 10px 0 4px; }
-  #summary pre { font-size: 12px; background: #8881; padding: 6px; overflow-x: auto; max-height: 16em; }
-  #summary table { border-collapse: collapse; }
-  #summary td { padding: 1px 10px 1px 0; }
+  pre { font-size: 12px; margin: 0; white-space: pre-wrap; word-break: break-all; }
+  #summary pre { background: #8881; padding: 6px; max-height: 16em; overflow: auto; }
+  #file pre .error { background: #d332; }
+  #file pre .warn { background: #b802; }
+  table { border-collapse: collapse; }
+  td, th { padding: 1px 10px 1px 0; text-align: left; vertical-align: top; }
+  #file td, #file th { border: 1px solid #8884; padding: 2px 6px; }
+  #file img { max-width: 100%; }
+  #jumps { margin-bottom: 6px; }
+  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
-<div id="head" class="muted">Waiting for a Tiny Tapeout project...</div>
-<div id="runs"></div>
-<div id="error" class="error"></div>
-<div id="summary"></div>
+<div id="bar">
+  <span id="head" class="muted">Waiting for a Tiny Tapeout project...</span>
+  <input id="filter" placeholder="Filter files" size="14" hidden>
+</div>
+<div id="main">
+  <div id="tree" hidden></div>
+  <div id="overview"><div id="runs"></div><div id="error" class="error"></div><div id="summary"></div></div>
+  <div id="file" hidden></div>
+</div>
 <script src="https://cdn.jsdelivr.net/npm/@rweda/makerchip-view-client@0.2/dist/index.global.js"></script>
 <script>
 const POLL_MS = 60000;      // While runs are in progress. (Each poll costs 1 request, plus 1 per unfinished run.)
 const WAIT_MS = 15000;      // Until the pushed commit's runs appear.
-const SUMMARY_MS = 30000;   // Until the finished runs' summary.json is published (no rate limit: GitHub Pages).
-const VIEWS_URL = 'https://stevehoover.github.io/makerchip-tt-views/';  // For companions opened without the IDE.
+const PUBLISH_MS = 30000;   // Until the finished runs' results are published (no rate limit: GitHub Pages).
 const ICON = { success: '✅', failure: '❌', cancelled: '⛔', skipped: '⏭️', timed_out: '⌛' };
+const TEXT = /\.(txt|log|rpt|tcl|v|sv|vh|tlv|yaml|yml|cfg|sdc|lef|ext|py|sh|mk|toml|ini|gtkw|rcx|cdl|spice|drc|lvs)$/i;
+const MAX_TEXT = 3e6;       // Bytes of a text file to show.
+// The summary's layout metrics (LibreLane's names), as shown.
+const METRICS = {
+  design__instance__count__stdcell: ['Cells'],
+  design__instance__utilization: ['Utilization', v => `${(v * 100).toFixed(1)}%`],
+  design__die__area: ['Die area', v => `${Math.round(v)} µm²`],
+  timing__setup__ws: ['Setup slack', v => `${v.toFixed(2)} ns`],
+  timing__hold__ws: ['Hold slack', v => `${v.toFixed(2)} ns`],
+  route__wirelength: ['Wire length', v => `${v} µm`],
+  power__total: ['Power', v => `${(v * 1000).toFixed(2)} mW`],
+  antenna__violating__nets: ['Antenna violations'],
+  design__lvs_error__count: ['LVS errors'],
+  magic__drc_error__count: ['DRC errors (Magic)'],
+  klayout__drc_error__count: ['DRC errors (KLayout)'],
+  route__drc_errors: ['Routing DRC errors'],
+};
 
 const view = MakerchipView.connect();
 // Tab status. Needs `rpc: true` in the opener's channel, like every call to the IDE.
 const setStatus = status => view.call('setStatus', status).catch(e => console.warn('TT view: setStatus:', e));
-let repo, sha, timer;
+const openUrl = url => view.call('openUrl', url).catch(() => window.open(url, '_blank'));
+const esc = text => String(text).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const $ = id => document.getElementById(id);
+let repo, sha, pages, timer;
 let generation = 0;              // Bumped by track(), so only the latest poll loop runs and renders.
 const finishedJobs = new Map();  // run id -> jobs, once the run and its jobs complete (they no longer change).
 let status = null;               // The last `tt/run-status` payload.
-let summarySha;                  // The commit whose summary is shown (or being fetched).
-const openedResults = new Set(); // Commits for which a failure opened TT Results.
+let resultsSha;                  // The commit whose results are shown (or being fetched).
+let manifest, summary, selected; // The published results, and the file shown (null: the overview).
 
-// Open links through the IDE: a view's own links can't open windows in every host (e.g. VS Code).
+// Links: a file of the results opens here; others open through the IDE, since a view's own links can't open
+// windows in every host (e.g. VS Code).
 document.addEventListener('click', e => {
-  const a = e.target.closest('a[href^="http"]');
+  const a = e.target.closest('a[data-file], a[href^="http"]');
   if (!a) { return; }
   e.preventDefault();
-  view.call('openUrl', a.href).catch(() => window.open(a.href, '_blank'));
+  a.dataset.file ? openFile(a.dataset.file) : openUrl(a.href);
 });
+$('filter').oninput = () => renderTree();
 
 view.expose({ getRunStatus: () => status });
 view.on('theme', ({ dark }) => document.body.classList.toggle('dark', dark));
 view.on('tt/run-start', p => track(p.repo, p.sha));
+const query = new URLSearchParams(location.search);  // (?repo=<owner>/<name>, outside the IDE.)
 view.call('getContext').then(ctx => {
   document.body.classList.toggle('dark', ctx.theme.dark);
-  if (ctx.params?.repo) { track(ctx.params.repo, ctx.params.sha); }
+  const r = ctx.params?.repo ?? query.get('repo');
+  if (r) { track(r, ctx.params?.sha); }
 }).catch(e => {
-  document.getElementById('error').textContent =
-    `Cannot reach the Makerchip IDE (${e.message}). Open this view with channel "rpc: true".`;
+  if (query.get('repo')) { return track(query.get('repo')); }
+  $('error').textContent = `Cannot reach the Makerchip IDE (${e.message}). Open this view with channel "rpc: true".`;
 });
 
 function track(newRepo, newSha) {
   repo = newRepo;
   sha = newSha;  // Undefined: the latest commit with runs.
+  const [owner, name] = repo.split('/');
+  pages = `https://${owner.toLowerCase()}.github.io/${name}/`;
+  manifest = summary = resultsSha = undefined;
+  $('summary').innerHTML = '';
+  overview();
   clearTimeout(timer);
   poll(++generation);
 }
@@ -93,7 +142,9 @@ async function poll(gen) {
   let delay = POLL_MS;
   try {
     sha ??= (await gh('/actions/runs?per_page=1')).workflow_runs[0]?.head_sha;
-    const runs = sha ? (await gh(`/actions/runs?head_sha=${sha}`)).workflow_runs : [];
+    // Each workflow's latest run (newest first), e.g. the last of makerchip's (one per TT workflow) or a rerun.
+    const runs = (sha ? (await gh(`/actions/runs?head_sha=${sha}`)).workflow_runs : [])
+      .filter((r, i, all) => all.findIndex(x => x.name === r.name) === i);
     for (const run of runs) {
       run.jobs = finishedJobs.get(run.id) ?? (await gh(`/actions/runs/${run.id}/jobs`)).jobs;
       // The API's runs and jobs (each cached up to a minute) can disagree, e.g. a completed run with jobs
@@ -112,83 +163,16 @@ async function poll(gen) {
     };
     view.emit('tt/run-status', status);
     render(runs);
-    document.getElementById('error').textContent = '';
+    $('error').textContent = '';
     if (done) {
-      if (summarySha !== sha) { summarySha = sha; loadSummary(gen); }
+      if (resultsSha !== sha) { resultsSha = sha; loadResults(gen); }
       return;
     }
-    if (summarySha !== sha) { document.getElementById('summary').innerHTML = ''; }
     if (runs.length === 0) { delay = WAIT_MS; }
   } catch (e) {
-    document.getElementById('error').textContent = e.message;
+    $('error').textContent = e.message;
   }
   if (gen === generation) { timer = setTimeout(() => poll(gen), delay); }
-}
-
-function pagesUrl() {
-  const [owner, name] = repo.split('/');
-  return `https://${owner.toLowerCase()}.github.io/${name}/`;
-}
-
-/** Fetch the commit's summary.json from GitHub Pages, waiting for makerchip.yaml to publish it, then show it. */
-async function loadSummary(gen) {
-  document.getElementById('summary').innerHTML = '<div class="muted">Waiting for the results to be published...</div>';
-  for (let tries = 0; tries < 40 && gen === generation; tries++) {
-    try {
-      const resp = await fetch(`${pagesUrl()}summary.json?sha=${sha}&t=${Date.now()}`, { cache: 'no-store' });
-      const summary = resp.ok ? await resp.json() : null;
-      if (gen !== generation) { return; }
-      if (summary?.sha === sha) { return showSummary(summary); }
-    } catch { /* (Not published yet.) */ }
-    await new Promise(r => setTimeout(r, SUMMARY_MS));
-  }
-  if (gen === generation) {
-    document.getElementById('summary').innerHTML =
-      '<div class="muted">No results were published for this commit (see the makerchip workflow).</div>';
-  }
-}
-
-const esc = text => String(text).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
-
-function showSummary(s) {
-  const tests = t => t ? `${t.tests - t.failed - t.skipped}/${t.tests} passed` : 'none';
-  const m = s.metrics ?? {};
-  const metric = (label, key, fmt = v => v) => key in m ? `<tr><td>${label}</td><td>${esc(fmt(m[key]))}</td></tr>` : '';
-  const stale = s.sv.filter(f => f.fresh === false);
-  const failed = s.failures.length > 0;
-  document.getElementById('summary').innerHTML = `
-    <button id="open-results">Results</button>
-    ${s.datasheet ? '<button id="open-datasheet">Datasheet</button>' : ''}
-    ${stale.map(f => `<div class="warn">⚠️ ${esc(f.sv)} wasn't generated from the committed ${esc(f.tlv)}, so these
-      results may not reflect it. (Run TT Flow regenerates it.)</div>`).join('')}
-    ${s.failures.map(f => `
-      <h4 class="error">❌ ${esc(f.run)} / ${esc(f.job)}${f.steps.length ? `: ${esc(f.steps.join(', '))}` : ''}</h4>
-      <pre>${esc((f.errors?.length ? f.errors : f.context ?? []).join('\n'))}</pre>
-      ${f.log ? `<a href="${pagesUrl()}${f.log}" target="_blank">Full log</a>` : ''}`).join('')}
-    <h4>Results</h4>
-    <table>
-      <tr><td>Tests (RTL)</td><td>${tests(s.tests.rtl)}</td></tr>
-      <tr><td>Tests (gate level)</td><td>${tests(s.tests.gl)}</td></tr>
-      <tr><td>Precheck</td><td>${tests(s.precheck)}</td></tr>
-      ${metric('Cells', 'design__instance__count__stdcell')}
-      ${metric('Utilization', 'design__instance__utilization', v => `${(v * 100).toFixed(1)}%`)}
-      ${metric('Setup slack', 'timing__setup__ws', v => `${v.toFixed(2)} ns`)}
-      ${metric('Hold slack', 'timing__hold__ws', v => `${v.toFixed(2)} ns`)}
-      ${s.tiles ? `<tr><td>Tiles</td><td>${esc(s.tiles)} (${esc(s.pdk ?? '')})</td></tr>` : ''}
-    </table>`;
-  document.getElementById('open-results').onclick = () => openCompanion('TT Results', `results.html?repo=${repo}`);
-  const datasheet = document.getElementById('open-datasheet');
-  if (datasheet) { datasheet.onclick = () => openCompanion('TT Datasheet', null, pagesUrl() + s.datasheet); }
-  if (stale.length && !failed) { setStatus('warning'); }
-  if (failed && !openedResults.has(s.sha)) {
-    openedResults.add(s.sha);
-    view.call('openCompanion', 'TT Results').catch(() => {});  // (Not in a browser tab; that's for a click.)
-  }
-}
-
-/** Open one of this view's companions (see README.md), or, without them (e.g. outside the IDE), its page. */
-function openCompanion(mnemonic, page, url = VIEWS_URL + page) {
-  view.call('openCompanion', mnemonic).catch(() => view.call('openUrl', url).catch(() => window.open(url, '_blank')));
 }
 
 function icon(item) {
@@ -196,21 +180,205 @@ function icon(item) {
 }
 
 function render(runs) {
-  document.getElementById('head').innerHTML = sha
-    ? `<a href="https://github.com/${repo}" target="_blank">${repo}</a> at
-       <a href="https://github.com/${repo}/commit/${sha}" target="_blank"><code>${sha.slice(0, 7)}</code></a>
+  $('head').innerHTML = sha
+    ? `<a href="https://github.com/${repo}">${repo}</a> at
+       <a href="https://github.com/${repo}/commit/${sha}"><code>${sha.slice(0, 7)}</code></a>
        <span class="muted">(updated ${new Date().toLocaleTimeString()})</span>`
     : `${repo}: no runs yet.`;
-  document.getElementById('runs').innerHTML = runs.length === 0 && sha
+  $('runs').innerHTML = runs.length === 0 && sha
     ? '<div class="muted">Waiting for GitHub Actions to start...</div>'
     : runs.map(r => `
       <div class="run">
-        <div class="name">${icon(r)} <a href="${r.html_url}" target="_blank">${r.name}</a></div>
+        <div class="name">${icon(r)} <a href="${r.html_url}">${r.name}</a></div>
         ${r.jobs.map(j => `
-          <div class="job">${icon(j)} <a href="${j.html_url}" target="_blank">${j.name}</a></div>
+          <div class="job">${icon(j)} <a href="${j.html_url}">${j.name}</a></div>
           ${(j.steps ?? []).filter(s => s.status === 'in_progress').map(s => `<div class="step">${s.name}</div>`).join('')}
         `).join('')}
       </div>`).join('');
+}
+
+// ---- The published results ----
+
+/** Fetch the commit's summary.json and manifest.json, waiting for makerchip.yaml to publish them, then show them. */
+async function loadResults(gen) {
+  $('summary').innerHTML = '<div class="muted">Waiting for the results to be published...</div>';
+  const get = async file => (await fetch(`${pages}${file}?sha=${sha}&t=${Date.now()}`, { cache: 'no-store' })).json();
+  for (let tries = 0; tries < 40 && gen === generation; tries++) {
+    try {
+      const [m, s] = await Promise.all([get('manifest.json'), get('summary.json')]);
+      if (gen !== generation) { return; }
+      if (m.sha === sha && s.sha === sha) {
+        [manifest, summary] = [m, s];
+        renderTree();
+        return showSummary();
+      }
+    } catch { /* (Not published yet.) */ }
+    await new Promise(r => setTimeout(r, PUBLISH_MS));
+  }
+  if (gen === generation) {
+    $('summary').innerHTML = '<div class="muted">No results were published for this commit (see the makerchip workflow).</div>';
+  }
+}
+
+function showSummary() {
+  const s = summary;
+  const stale = s.sv.filter(f => f.fresh === false);
+  const tests = (label, t) => !t ? `<tr><td>${label}</td><td class="muted">none</td></tr>` : `
+    <tr><td>${label}</td><td><details><summary>${t.tests - t.failed - t.skipped}/${t.tests} passed</summary>
+      <table>${t.cases.map(c => `<tr><td>${c.status === 'passed' ? '✅' : c.status === 'skipped' ? '⏭️' : '❌'}</td>
+        <td>${esc(c.name)}</td><td>${esc(c.message ?? '')}</td></tr>`).join('')}</table></details></td></tr>`;
+  const metrics = Object.entries(METRICS).filter(([k]) => k in (s.metrics ?? {}))
+    .map(([k, [label, fmt = v => v]]) => `<tr><td>${label}</td><td>${esc(fmt(s.metrics[k]))}</td></tr>`).join('');
+  $('summary').innerHTML = `
+    ${stale.map(f => `<p class="warn">⚠️ ${esc(f.sv)} wasn't generated from the committed ${esc(f.tlv)}, so these
+      results may not reflect it. (Run TT Flow regenerates it.)</p>`).join('')}
+    ${s.failures.map(f => `
+      <h4 class="error">❌ ${esc(f.run)} / ${esc(f.job)}${f.steps.length ? `: ${esc(f.steps.join(', '))}` : ''}</h4>
+      <pre>${esc((f.errors?.length ? f.errors : f.context ?? []).join('\n'))}</pre>
+      ${f.log ? `<a href="#" data-file="${esc(f.log)}">Full log</a>` : ''}`).join('')}
+    <h4>Results</h4>
+    <table>
+      ${tests('Tests (RTL)', s.tests.rtl)}${tests('Tests (gate level)', s.tests.gl)}${tests('Precheck', s.precheck)}
+      ${metrics}
+      ${s.tiles ? `<tr><td>Tiles</td><td>${esc(s.tiles)} (${esc(s.pdk ?? '')})</td></tr>` : ''}
+      ${s.datasheet ? `<tr><td>Datasheet</td><td><a href="${pages}${s.datasheet}">PDF</a></td></tr>` : ''}
+    </table>
+    <p class="muted">Every published file is listed at the left. Not published: the tools' binary databases
+      (${Object.entries(manifest.omitted ?? {}).map(([ext, o]) => `${o.files} ${ext}`).join(', ') || 'none'}),
+      which are in the runs' artifacts on GitHub.</p>`;
+  if (stale.length && !s.failures.length) { setStatus('warning'); }
+}
+
+// ---- The file tree ----
+
+function renderTree() {
+  const filter = $('filter').value.toLowerCase();
+  const root = {};
+  for (const file of manifest?.files ?? []) {
+    if (filter && !file.toLowerCase().includes(filter)) { continue; }
+    let node = root;
+    const parts = file.split('/');
+    parts.slice(0, -1).forEach(p => { node = node[p + '/'] ??= {}; });
+    node[parts.at(-1)] = file;
+  }
+  const html = (node, depth) => Object.keys(node).sort((a, b) => (b.endsWith('/') - a.endsWith('/')) || a.localeCompare(b))
+    .map(k => typeof node[k] === 'string'
+      ? `<span class="file${node[k] === selected ? ' selected' : ''}" data-file="${esc(node[k])}">${esc(k)}</span>`
+      : `<details${filter || depth < 1 ? ' open' : ''}><summary>${esc(k)}</summary>${html(node[k], depth + 1)}</details>`)
+    .join('');
+  $('tree').hidden = $('filter').hidden = !manifest;
+  $('tree').innerHTML = `<span class="file${selected ? '' : ' selected'}" data-overview="1">Progress</span>` + html(root, 0);
+  $('tree').onclick = e => {
+    const el = e.target.closest('.file');
+    if (el?.dataset.overview) { overview(); } else if (el) { openFile(el.dataset.file); }
+  };
+}
+
+// ---- The file viewer ----
+
+function overview() {
+  selected = null;
+  $('overview').hidden = false;
+  $('file').hidden = true;
+  renderTree();
+}
+
+function pane(html) {
+  const p = $('file');
+  p.innerHTML = html;
+  p.scrollTop = 0;
+  return p;
+}
+
+const table = obj => `<table>${Object.entries(obj).map(([k, v]) =>
+  `<tr><td>${esc(k)}</td><td>${esc(typeof v === 'object' ? JSON.stringify(v) : v)}</td></tr>`).join('')}</table>`;
+
+async function openFile(file) {
+  selected = file;
+  $('overview').hidden = true;
+  $('file').hidden = false;
+  renderTree();
+  const url = pages + file, ext = (file.match(/\.([^./]+)$/)?.[1] ?? '').toLowerCase();
+  const link = `<p class="muted"><a href="${esc(url)}">${esc(file)}</a></p>`;
+  if (/^(png|jpe?g|gif|svg)$/.test(ext)) { return pane(`${link}<img src="${esc(url)}">`); }
+  if (ext === 'pdf') { return pane(`${link}<p>A PDF: follow the link to open it.</p>`); }
+  if (ext === 'fst' || ext === 'vcd') {
+    return pane(`${link}<p>A waveform: <a href="https://app.surfer-project.org/?load_url=${encodeURIComponent(url)}">open in Surfer</a>.</p>`);
+  }
+  if (!['json', 'csv', 'md', 'xml', 'html'].includes(ext) && !TEXT.test(file) && ext !== '') {
+    return pane(`${link}<p>No preview for this file type; follow the link to download it.</p>`);
+  }
+  pane(`${link}<div class="muted">Loading...</div>`);
+  let text;
+  try {
+    text = await (await fetch(url)).text();
+  } catch (e) { return pane(`${link}<p class="error">Couldn't load it (${esc(e.message)}).</p>`); }
+  if (selected !== file) { return; }
+  const cut = text.length > MAX_TEXT ? `<p class="warn">Showing the first ${MAX_TEXT / 1e6} MB.</p>` : '';
+  text = text.slice(0, MAX_TEXT);
+  if (ext === 'json') {
+    try {
+      const data = JSON.parse(text);
+      const flat = data && typeof data === 'object' && !Array.isArray(data) && Object.values(data).every(v => typeof v !== 'object' || v === null);
+      return pane(link + (flat ? table(data) : `<pre>${esc(JSON.stringify(data, null, 1))}</pre>`));
+    } catch { /* (Shown as text.) */ }
+  }
+  if (ext === 'csv') {
+    const rows = text.trim().split('\n').map(r => r.split(','));
+    return pane(`${link}<table>${rows.map(r => `<tr>${r.map(c => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</table>`);
+  }
+  if (ext === 'md') { return pane(link + markdown(text)); }
+  if (ext === 'xml' && /<testcase/.test(text)) { return pane(link + junit(text)); }
+  showText(link + cut, text);
+}
+
+/** Text, with error and warning lines highlighted and a list of the errors to jump to. */
+function showText(head, text) {
+  const cls = l => /##\[error\]|\b(ERROR|Error|FAILED|FAIL)\b|\berror:/.test(l) ? 'error'
+    : /##\[warning\]|\b(WARNING|Warning)\b|\bwarning:/.test(l) ? 'warn' : '';
+  const errors = [];
+  const body = text.split('\n').map((l, i) => {
+    const c = cls(l);
+    if (c === 'error') { errors.push(i); }
+    return c ? `<span id="L${i}" class="${c}">${esc(l)}</span>` : esc(l);
+  }).join('\n');
+  const jumps = errors.length ? `<div id="jumps">${errors.length} error line(s): ${errors.slice(0, 50)
+    .map(i => `<span class="link" data-line="${i}"><u>${i + 1}</u></span>`).join(' ')}</div>` : '';
+  const p = pane(`${head}${jumps}<pre>${body}</pre>`);
+  p.querySelectorAll('[data-line]').forEach(a => a.onclick = () => $('L' + a.dataset.line).scrollIntoView({ block: 'center' }));
+  if (errors.length) { $('L' + errors[0]).scrollIntoView({ block: 'center' }); }
+}
+
+function junit(text) {
+  const doc = new DOMParser().parseFromString(text, 'text/xml');
+  return `<table>${[...doc.getElementsByTagName('testcase')].map(c => {
+    const bad = c.querySelector('failure, error'), skipped = c.querySelector('skipped');
+    return `<tr><td>${bad ? '❌' : skipped ? '⏭️' : '✅'}</td><td>${esc(c.getAttribute('name'))}</td>
+      <td>${esc(bad?.getAttribute('message') ?? bad?.textContent ?? '')}</td></tr>`;
+  }).join('')}</table>`;
+}
+
+/** A little Markdown: headings, tables, lists, links, code, and paragraphs. */
+function markdown(text) {
+  const inline = s => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+    .replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '<a href="$2">$1</a>');
+  const out = [];
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (/^#{1,6} /.test(l)) { const n = l.match(/^#+/)[0].length; out.push(`<h${n}>${inline(l.slice(n + 1))}</h${n}>`); }
+    else if (/^\|/.test(l)) {
+      const rows = [];
+      for (; i < lines.length && /^\|/.test(lines[i]); i++) {
+        if (!/^\|[\s:|-]+\|$/.test(lines[i])) { rows.push(lines[i].split('|').slice(1, -1).map(c => inline(c.trim()))); }
+      }
+      i--;
+      out.push(`<table>${rows.map((r, j) => `<tr>${r.map(c => j ? `<td>${c}</td>` : `<th>${c}</th>`).join('')}</tr>`).join('')}</table>`);
+    }
+    else if (/^\s*[-*] /.test(l)) { out.push(`<li>${inline(l.replace(/^\s*[-*] /, ''))}</li>`); }
+    else if (l.trim()) { out.push(`<p>${inline(l)}</p>`); }
+  }
+  return out.join('\n');
 }
 </script>
 </body>

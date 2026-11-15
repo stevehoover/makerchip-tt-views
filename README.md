@@ -14,9 +14,7 @@ anonymously, and its results from its GitHub Pages.
 
 | View | Page | Shows |
 |---|---|---|
-| TT Progress | `progress.html` | The commit's workflow runs, their jobs, and the steps in progress; then its published results at a glance (`summary.json`): why a job failed, tests, precheck, layout metrics, a stale `.sv`. Opens TT Results and TT Datasheet, and TT Results by itself on a failure. |
-| TT Results | `results.html` | Every file the commit's runs published, each shown according to its type (logs with their errors marked, reports, JSON, CSV, Markdown, test results, images; a waveform via Surfer). Opens on a failed job's log. Also works in a browser tab: `results.html?repo=<owner>/<name>`. |
-| TT Datasheet | (the project's Pages) | The project's `datasheet.pdf`, from TT's `docs` run, in Makerchip's PDF view. |
+| TT Progress | `progress.html` | The commit's workflow runs, their jobs, and the steps in progress; then its published results: at a glance (`summary.json`: why a job failed, tests, precheck, layout metrics, a stale `.sv`), and every published file, each shown according to its type (logs with their errors marked, reports, JSON, CSV, Markdown, test results, images; PDFs and waveforms, via Surfer, by link). Also works in a browser tab: `progress.html?repo=<owner>/<name>`. |
 | TT Layout | `layout.html` | The layout from the project's Pages: the 2D render, TT's 3D viewer, Tiny Tapeout Explorer. |
 | TT VGA | `vga.html` | Each Makerchip compile's Verilog running live in [VGA Playground](https://github.com/stevehoover/vga-playground) (a fork, for its embedding API): the Tiny VGA PMOD display, inputs and audio. |
 
@@ -33,10 +31,6 @@ Each sets its tab status: working while its results are pending, then success, w
   only poller of the GitHub API, whose anonymous limit is 60 requests/hour; it polls each minute until the runs
   complete.
 - **RPC `getRunStatus()`** on TT Progress (with `rpc: true`) returns the last `tt/run-status` payload.
-- **`companions`** of TT Progress (see the Third-Party View API): `"TT Results"` (`results.html`, with `params`
-  `{repo}`, subscribing `tt/run-start`, `tt/run-status` and the IDE's `theme`, and itself with the companion
-  `"TT Datasheet"`) and `"TT Datasheet"` (a `pdf` view of `<pages>/runs/docs/PDF/datasheet.pdf`). Without them
-  (e.g. in a browser), the views open these pages in a new tab.
 - **TT VGA** subscribes to the IDE's `compile-result` and `theme` (`sources: ["ide"]`), and needs no `repo`. It
   loads the generated Verilog and the files under `sv_url_inc/` (as listed in `artifacts`) from each successful
   compile's `resultsUrl`. The page's `?playground=<url>` overrides the VGA Playground URL (e.g. a dev server's
