@@ -199,7 +199,7 @@ function render(runs) {
 
 // ---- The published results ----
 
-/** Fetch the commit's summary.json and manifest.json, waiting for makerchip.yaml to publish them, then show them. */
+/** Fetch the commit's summary.json and manifest.json, waiting for the template's viewer job to publish them, then show them. */
 async function loadResults(gen) {
   $('summary').innerHTML = '<div class="muted">Waiting for the results to be published...</div>';
   const get = async file => (await fetch(`${pages}${file}?sha=${sha}&t=${Date.now()}`, { cache: 'no-store' })).json();
@@ -216,7 +216,7 @@ async function loadResults(gen) {
     await new Promise(r => setTimeout(r, PUBLISH_MS));
   }
   if (gen === generation) {
-    $('summary').innerHTML = '<div class="muted">No results were published for this commit (see the makerchip workflow).</div>';
+    $('summary').innerHTML = '<div class="muted">No results were published for this commit (see the gds workflow's viewer job).</div>';
   }
 }
 
@@ -337,7 +337,7 @@ function showText(head, text) {
   const cls = l => /##\[error\]|\b(ERROR|Error|FAILED|FAIL)\b|\berror:/.test(l) ? 'error'
     : /##\[warning\]|\b(WARNING|Warning)\b|\bwarning:/.test(l) ? 'warn' : '';
   const errors = [];
-  const body = text.split('\n').map((l, i) => {
+  const body = text.replace(/\x1b\[[\d;]*m/g, '').split('\n').map((l, i) => {  // (Without terminal colors.)
     const c = cls(l);
     if (c === 'error') { errors.push(i); }
     return c ? `<span id="L${i}" class="${c}">${esc(l)}</span>` : esc(l);

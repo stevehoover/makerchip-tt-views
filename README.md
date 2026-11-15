@@ -67,17 +67,17 @@ What a new view can read. TT's workflows (`gds`, `test`, `docs`) all run on push
 
 ### GitHub Pages
 
-tt-makerchip-template's `makerchip.yaml` workflow runs as each of `gds`, `test` and `docs` completes. Once `gds`
-has completed (its `viewer` job also deploys Pages), it republishes Pages for the branch's latest commit:
+tt-makerchip-template replaces TT's `viewer` job (in `gds`) with one that publishes, for the default branch's latest
+commit, once the rest of `gds` (with or without a layout) and the commit's `test` and `docs` runs have finished:
 
 - TT's viewer files, as its `viewer` job lays them out.
 - `runs/<workflow>/<artifact>/...`: every artifact of the commit's latest `gds`, `test` and `docs` runs, unzipped,
   except the tools' binary databases (`.odb`, `.gds`, `.oas`, `.mag`, `.def`, `.sdf`, `.spef`, `.lib`), which only
   EDA tools read; the final layout is TT's `tinytapeout.{gds,oas}`.
-- `runs/<workflow>/logs/...`: each completed run's job logs (as GitHub's log archive lays them out).
+- `runs/<workflow>/logs/<job>.txt`: each completed job's log.
 - `manifest.json`: `{sha, published, pdk, runs, sv, omitted, files}`, where `pdk` is `tt_submission/pdk.json`
   (PDK and tool versions), `runs.<workflow>` is `{id, url, status, conclusion, jobs: [{name, status, conclusion,
-  url, failed_steps}], artifacts, logs}`, `sv` lists each `src/*.sv` as `{sv, tlv, fresh, vga}`, `omitted` counts
+  url, log, failed_steps}], artifacts}` (for `gds`, the jobs before `viewer`), `sv` lists each `src/*.sv` as `{sv, tlv, fresh, vga}`, `omitted` counts
   the files left out, by extension (`{files, bytes}`), and `files` lists every file.
 - `summary.json`: the results at a glance, `{sha, pdk, tiles, runs: {<workflow>: {conclusion, url}}, metrics,
   tests: {rtl, gl}, precheck, failures, sv, datasheet}`. `metrics` are key LibreLane metrics of the final layout,
@@ -86,8 +86,8 @@ has completed (its `viewer` job also deploys Pages), it republishes Pages for th
   errors, context}`: its log's path, its error lines, and the lines leading to its first error. `datasheet` is the
   PDF's path, or `null`.
 
-A run that completes before `gds` publishes nothing; `gds`'s own completion then does. Poll `manifest.json` or
-`summary.json` (with a cache-busting query) until its `sha` is the commit you want.
+Poll `manifest.json` or `summary.json` (with a cache-busting query) until its `sha` is the commit you want. (A rerun
+of `viewer` for a commit already published may not take effect; see tt-makerchip-template's `gds.yaml`.)
 
 **`fresh`** says whether a generated `.sv` was generated from the committed `.tlv`: "Run TT Flow" stamps the
 `.sv` with `// makerchip-tt: tlv-sha256 <hash>`, the SHA-256 of the `.tlv` with line endings normalized to LF.

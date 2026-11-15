@@ -49,12 +49,14 @@ view.on('tt/run-status', p => {
   if (!gds) { return; }
   const sha7 = p.sha.slice(0, 7);
   const viewer = gds.jobs.find(j => j.name === 'viewer');
-  // Judge by the jobs, and fail only once the run and all its jobs agree they are finished.
+  // Judge by the jobs, and fail only once the run and all its jobs agree they are finished. (A project made from
+  // tt-makerchip-template runs its viewer job, which publishes, even when the gds job fails.)
+  const built = gds.jobs.find(j => j.name === 'gds')?.conclusion === 'success' && viewer?.conclusion === 'success';
   const finished = gds.status === 'completed' && gds.jobs.every(j => j.status === 'completed');
-  if (!(viewer?.status === 'completed' && viewer.conclusion === 'success') && !finished) {
+  if (!built && !finished) {
     note(`Building the layout of ${sha7}...`);
     setStatus('working');
-  } else if (viewer?.conclusion === 'success') {
+  } else if (built) {
     if (shownSha !== p.sha) {
       shownSha = p.sha;
       stamp = p.sha;
@@ -63,7 +65,7 @@ view.on('tt/run-status', p => {
     note(`Layout of ${sha7}`);
     setStatus('success');
   } else {
-    note(`The gds workflow failed for ${sha7}; showing the last published layout.`);
+    note(`The gds workflow failed for ${sha7}; see TT Progress.`);
     setStatus('fail');
   }
 });
