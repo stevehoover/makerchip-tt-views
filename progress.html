@@ -74,6 +74,8 @@ const ICON = { success: '✅', failure: '❌', cancelled: '⛔', skipped: '⏭�
 const TEXT = /\.(txt|log|rpt|tcl|v|sv|vh|tlv|yaml|yml|cfg|sdc|lef|ext|py|sh|mk|toml|ini|gtkw|rcx|cdl|spice|drc|lvs)$/i;
 const MAX_TEXT = 3e6;       // Bytes of a text file to show (or search).
 const MAX_HITS = 500;       // Lines a search lists.
+const TT_APP = 'https://app.tinytapeout.com/';  // Tiny Tapeout's submission app (needs GitHub sign-in, so not framed).
+const TT_SUBMIT_GUIDE = 'https://tinytapeout.com/guides/advanced-workshop/submit-your-design/';
 // The summary's layout metrics (LibreLane's names), as shown.
 const METRICS = {
   design__instance__count__stdcell: ['Cells'],
@@ -258,6 +260,9 @@ function showSummary() {
     <tr><td>${label}</td><td><details><summary>${t.tests - t.failed - t.skipped}/${t.tests} passed</summary>
       <table>${t.cases.map(c => `<tr><td>${c.status === 'passed' ? '✅' : c.status === 'skipped' ? '⏭️' : '❌'}</td>
         <td>${esc(c.name)}</td><td>${esc(c.message ?? '')}</td></tr>`).join('')}</table></details></td></tr>`;
+  // Tiny Tapeout requires passing gds and docs runs (see TT_SUBMIT_GUIDE).
+  const blockers = ['gds', 'docs'].filter(name => s.runs[name]?.conclusion !== 'success')
+    .map(name => s.runs[name] ? `${name} failed` : `no ${name} run`);
   const metrics = Object.entries(METRICS).filter(([k]) => k in (s.metrics ?? {}))
     .map(([k, [label, fmt = v => v]]) => `<tr><td>${label}</td><td>${esc(fmt(s.metrics[k]))}</td></tr>`).join('');
   $('summary').innerHTML = `
@@ -267,6 +272,12 @@ function showSummary() {
       <h4 class="error">❌ ${esc(f.run)} / ${esc(f.job)}${f.steps.length ? `: ${esc(f.steps.join(', '))}` : ''}</h4>
       <pre>${esc((f.errors?.length ? f.errors : f.context ?? []).join('\n'))}</pre>
       ${f.log ? `<a href="#" data-file="${esc(f.log)}">Full log</a>` : ''}`).join('')}
+    <h4>Submission</h4>
+    <p>${blockers.length ? `Commit <code>${esc(s.sha.slice(0, 7))}</code> can't be submitted (${blockers.join(', ')}).`
+      : `✅ Commit <code>${esc(s.sha.slice(0, 7))}</code> can be submitted.`}
+      In Tiny Tapeout's app, signed in with GitHub, <a href="${TT_APP}projects/create">create a project</a> from this
+      repository the first time; then, for this and each later version, <a href="${TT_APP}">submit a new revision</a>
+      of the project. (<a href="${TT_SUBMIT_GUIDE}">Tiny Tapeout's guide</a>)</p>
     <h4>Results</h4>
     <table>
       ${tests('Tests (RTL)', s.tests.rtl)}${tests('Tests (gate level)', s.tests.gl)}${tests('Precheck', s.precheck)}

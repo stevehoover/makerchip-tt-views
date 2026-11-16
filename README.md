@@ -14,7 +14,7 @@ anonymously, and its results from its GitHub Pages.
 
 | View | Page | Shows |
 |---|---|---|
-| TT Build | `progress.html` (its former name, TT Build) | The commit's workflow runs, their jobs, and the steps in progress; then its published results: at a glance (`summary.json`: why a job failed, tests, precheck, layout metrics, a stale `.sv`), and every published file, with a text search, each shown according to its type (logs with their errors marked, reports, JSON, CSV, Markdown, test results, images; PDFs and waveforms, via Surfer, by link). Also works in a browser tab: `progress.html?repo=<owner>/<name>`. |
+| TT Build | `progress.html` | The commit's workflow runs, their jobs, and the steps in progress; then its published results: at a glance (`summary.json`: why a job failed, tests, precheck, layout metrics, a stale `.sv`), and every published file, with a text search, each shown according to its type; and whether the commit can be submitted to Tiny Tapeout (its `gds` and `docs` runs passed), with links to TT's app (logs with their errors marked, reports, JSON, CSV, Markdown, test results, images; PDFs and waveforms, via Surfer, by link). Also works in a browser tab: `progress.html?repo=<owner>/<name>`. |
 | TT Layout | `layout.html` | The layout from the project's Pages: the 2D render, TT's 3D viewer, Tiny Tapeout Explorer. |
 | TT VGA | `vga.html` | Each Makerchip compile's Verilog running live in [VGA Playground](https://github.com/stevehoover/vga-playground) (a fork, for its embedding API): the Tiny VGA PMOD display, inputs and audio. |
 
