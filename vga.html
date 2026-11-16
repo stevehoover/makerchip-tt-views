@@ -84,9 +84,10 @@ function reflect({ which, id, success, resultsUrl, artifacts }) {
     if (!success) {
       note('The Makerchip compile failed.');
       setStatus('fail');
-    } else if (!resultsUrl) {
-      note('This compile\'s Verilog is not available to views.');
-      setStatus('fail');
+    } else if (!resultsUrl || !Object.keys(artifacts ?? {}).some(f => artifacts[f] && f.endsWith('.sv'))) {
+      // (E.g. a compile restored by an extension that didn't keep its artifacts.)
+      note(`This compile's Verilog is not available to views. Compile again to show it.`);
+      setStatus('none');
     } else if (Object.keys(artifacts ?? {}).some(f => artifacts[f] && f.endsWith('_gen.sv'))) {
       // An include fragment, which VGA Playground would compile on its own.
       note('Add --inlineGen to the \\m5_TLV_version line, to generate a single Verilog file.');
