@@ -12,7 +12,7 @@
 <title>TT Build</title>
 <style>
   body { font: 13px system-ui, sans-serif; margin: 0; color: #222; background: #fff; display: flex;
-         flex-direction: column; height: 100vh; }
+         flex-direction: column; height: 100vh; overflow: hidden; }  /* (The panes scroll.) */
   body.dark { color: #ddd; background: #1e1e1e; }
   a { color: inherit; }
   h4 { margin: 10px 0 4px; }
@@ -27,13 +27,15 @@
   #tree summary { cursor: pointer; }
   #tree .file { display: block; margin-left: 22px; cursor: pointer; white-space: nowrap; }
   #tree .file.selected { font-weight: bold; }
-  #overview, #file { flex: 1; overflow: auto; padding: 8px; }
+  #tree.alone { flex: 1; border-right: 0; }  /* (Nothing selected.) */
+  #overview, #file { flex: 1; min-width: 0; overflow: auto; padding: 8px; }  /* (min-width: may be narrower than its content.) */
   .run { margin: 0 0 10px; }
   .run > .name { font-weight: bold; }
   .job { margin-left: 1.5em; }
   .step { margin-left: 3em; opacity: 0.75; }
   pre { font-size: 12px; margin: 0; white-space: pre-wrap; word-break: break-all; }
   #summary pre { background: #8881; padding: 6px; max-height: 16em; overflow: auto; }
+  #file pre { white-space: pre; word-break: normal; width: max-content; min-width: 100%; }  /* (Unwrapped; the pane scrolls.) */
   #file pre .error { background: #d332; }
   #file pre .warn { background: #b802; }
   #file pre .hit, #file mark { background: #fd04; color: inherit; }
@@ -49,8 +51,14 @@
 <body>
 <div id="bar">
   <span id="head" class="muted">Waiting for a Tiny Tapeout project...</span>
-  <input id="filter" placeholder="Filter files" size="14" hidden>
-  <input id="search" placeholder="Search text" size="14" hidden>
+  <span id="stale" class="warn" hidden title="Its tab's check is gray.">Not of the design compiled in Makerchip.</span>
+  <span id="find" hidden>
+    <label>Search <input id="query" size="14"></label>
+    <select id="scope" title="Names filter the files as you type; text is searched on Enter.">
+      <option value="names">file names</option><option value="all">all text</option>
+      <option value="file" disabled>this file</option>
+    </select>
+  </span>
 </div>
 <div id="main">
   <div id="tree" hidden></div>
@@ -95,6 +103,8 @@ let status = null;               // The last `tt/run-status` payload.
 let resultsSha;                  // The commit whose results are shown (or being fetched).
 let manifest, summary, selected; // The published results, and the file shown (null: the overview).
 const texts = new Map();         // file -> its text (a promise), once fetched.
+let buildStatus;                 // This view's status for the build (see showStatus()).
+let compiled;                    // The SHA-256 of the .tlv last compiled in Makerchip (`tt/compiled`), if known.
 
 // Links: a file of the results opens here; others open through the IDE, since a view's own links can't open
 // windows in every host (e.g. VS Code).
@@ -104,12 +114,21 @@ document.addEventListener('click', e => {
   e.preventDefault();
   a.dataset.file ? openFile(a.dataset.file) : openUrl(a.href);
 });
-$('filter').oninput = () => renderTree();
-$('search').onkeydown = e => { if (e.key === 'Enter') { search($('search').value); } };
+// The search box: file names filter the tree as you type; text is searched on Enter.
+$('query').oninput = () => { if ($('scope').value === 'names') { renderTree(); } };
+$('query').onkeydown = e => { if (e.key === 'Enter') { find(); } };
+$('scope').onchange = () => { renderTree(); find(); };
+
+function find() {
+  const query = $('query').value.trim().toLowerCase();
+  if (query && $('scope').value === 'all') { search(query); }
+  if ($('scope').value === 'file' && selected) { openFile(selected, query || undefined); }
+}
 
 view.expose({ getRunStatus: () => status });
 view.on('theme', ({ dark }) => document.body.classList.toggle('dark', dark));
 view.on('tt/run-start', p => track(p.repo, p.sha));
+view.on('tt/compiled', p => { compiled = p.sha256; showStatus(); });
 const query = new URLSearchParams(location.search);  // (?repo=<owner>/<name>, outside the IDE.)
 view.call('getContext').then(ctx => {
   document.body.classList.toggle('dark', ctx.theme.dark);
@@ -163,7 +182,8 @@ async function poll(gen) {
     if (gen !== generation) { return; }
     const done = runs.length > 0 && runs.every(r => r.finished);
     const failed = runs.some(r => r.finished && r.conclusion !== 'success');
-    setStatus(!done ? 'working' : failed ? 'fail' : 'success');
+    buildStatus = !done ? 'working' : failed ? 'fail' : 'success';
+    showStatus();
     status = {
       repo, sha, done,
       runs: runs.map(r => ({ name: r.name, status: r.status, conclusion: r.conclusion, url: r.html_url,
@@ -258,13 +278,25 @@ function showSummary() {
       (${Object.entries(manifest.omitted ?? {}).map(([ext, o]) => `${o.files} ${ext}`).join(', ') || 'none'}),
       which are in the runs' artifacts on GitHub.</p>`;
   $('summary').querySelectorAll('pre').forEach(pre => { pre.scrollTop = pre.scrollHeight; });  // (Nearest the error.)
-  if (stale.length && !s.failures.length) { setStatus('warning'); }
+  if (stale.length && !s.failures.length) { buildStatus = 'warning'; }
+  showStatus();
+}
+
+/**
+ * Set the tab status for the build: a success is `success_stale` (a gray check) if the design compiled in Makerchip
+ * isn't the build's (by its .tlv's hash, from the extension's `tt/compiled`; unknown until both are known).
+ */
+function showStatus() {
+  const built = (summary?.sv ?? []).map(f => f.tlv_sha256).filter(Boolean);
+  const other = !!compiled && built.length > 0 && !built.includes(compiled);
+  $('stale').hidden = !other;
+  if (buildStatus) { setStatus(buildStatus === 'success' && other ? 'success_stale' : buildStatus); }
 }
 
 // ---- The file tree ----
 
 function renderTree() {
-  const filter = $('filter').value.toLowerCase();
+  const filter = $('scope').value === 'names' ? $('query').value.toLowerCase() : '';
   const root = {};
   for (const file of manifest?.files ?? []) {
     if (filter && !file.toLowerCase().includes(filter)) { continue; }
@@ -278,11 +310,12 @@ function renderTree() {
       ? `<span class="file${node[k] === selected ? ' selected' : ''}" data-file="${esc(node[k])}">${esc(k)}</span>`
       : `<details${filter || depth < 1 ? ' open' : ''}><summary>${esc(k)}</summary>${html(node[k], depth + 1)}</details>`)
     .join('');
-  $('tree').hidden = $('filter').hidden = $('search').hidden = !manifest;
+  $('tree').hidden = $('find').hidden = !manifest;
   $('tree').innerHTML = `<span class="file${selected ? '' : ' selected'}" data-overview="1">Build</span>` + html(root, 0);
   $('tree').onclick = e => {
     const el = e.target.closest('.file');
     if (el?.dataset.overview) { overview(); } else if (el) { openFile(el.dataset.file); }
+    else if (!e.target.closest('summary')) { clear(); }  // (Not a folder's toggle.)
   };
 }
 
@@ -290,15 +323,28 @@ function renderTree() {
 
 function overview() {
   select(null);
-  $('overview').hidden = false;
-  $('file').hidden = true;
+  showPane('overview');
 }
 
-/** Mark `file` (null: the overview) as the one shown, leaving the tree as the user arranged it. */
+/** Show nothing beside the tree, giving it the room. */
+function clear() {
+  select(undefined);
+  showPane(null);
+}
+
+/** Show the overview ('overview'), the file pane ('file'), or neither (null: the tree alone). */
+function showPane(id) {
+  $('overview').hidden = id !== 'overview';
+  $('file').hidden = id !== 'file';
+  $('tree').classList.toggle('alone', !id);
+}
+
+/** Mark `file` (null: the overview; undefined: nothing) as the one shown, leaving the tree as the user arranged it. */
 function select(file) {
   selected = file;
+  $('scope').querySelector('[value=file]').disabled = !file;
   $('tree').querySelectorAll('.file').forEach(el =>
-    el.classList.toggle('selected', file ? el.dataset.file === file : !!el.dataset.overview));
+    el.classList.toggle('selected', file ? el.dataset.file === file : file === null && !!el.dataset.overview));
 }
 
 function pane(html) {
@@ -314,8 +360,7 @@ const table = obj => `<table>${Object.entries(obj).map(([k, v]) =>
 /** Show `file` according to its type, or, for a search hit, as text with `query`'s lines marked, at line `line`. */
 async function openFile(file, query, line) {
   select(file);
-  $('overview').hidden = true;
-  $('file').hidden = false;
+  showPane('file');
   const url = pages + file, ext = (file.match(/\.([^./]+)$/)?.[1] ?? '').toLowerCase();
   const link = `<p class="muted"><a href="${esc(url)}">${esc(file)}</a></p>`;
   if (/^(png|jpe?g|gif|svg)$/.test(ext)) { return pane(`${link}<img src="${esc(url)}">`); }
@@ -368,7 +413,8 @@ function showText(head, text, query, line) {
   }).join('\n');
   const jumps = marked.length ? `<div id="jumps">${marked.length} ${query ? 'match' : 'error'} line(s): ${marked
     .slice(0, 50).map(i => `<span class="link" data-line="${i}"><u>${i + 1}</u></span>`).join(' ')}</div>` : '';
-  const p = pane(`${head}${jumps}<pre>${body}</pre>`);
+  const none = query && !marked.length ? `<p class="muted">No line contains "${esc(query)}".</p>` : '';
+  const p = pane(`${head}${jumps}${none}<pre>${body}</pre>`);
   p.querySelectorAll('[data-line]').forEach(a => a.onclick = () => $('L' + a.dataset.line).scrollIntoView({ block: 'center' }));
   const first = line ?? marked[0];
   if (first !== undefined) { $('L' + first)?.scrollIntoView({ block: 'center' }); }
@@ -390,16 +436,14 @@ const isText = file => TEXT.test(file) || /\.(json|csv|md|xml|html)$/i.test(file
 
 /** List the lines of the published text files that contain `query` (ignoring case). */
 async function search(query) {
-  query = query.trim().toLowerCase();
-  if (!query || !manifest) { return; }
-  select(null);
-  $('overview').hidden = true;
-  $('file').hidden = false;
+  if (!manifest) { return; }
+  select(undefined);
+  showPane('file');
   const files = manifest.files.filter(isText);
   const hits = [];  // [file, [[line, text], ...]]
   let done = 0, count = 0;
   const show = () => {
-    if ($('search').value.trim().toLowerCase() !== query) { return; }  // (Superseded.)
+    if ($('query').value.trim().toLowerCase() !== query || $('scope').value !== 'all') { return; }  // (Superseded.)
     pane(`<p class="muted">${count >= MAX_HITS ? `The first ${MAX_HITS} lines` : `${count} line(s)`} containing
       "${esc(query)}"${done < files.length ? `, searching ${done}/${files.length} files...` : ` in ${files.length} files.`}</p>` +
       hits.map(([file, lines]) => `<div><b>${esc(file)}</b></div><div class="hits">${lines.map(([i, l]) =>

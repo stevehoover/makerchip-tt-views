@@ -19,6 +19,8 @@ anonymously, and its results from its GitHub Pages.
 | TT VGA | `vga.html` | Each Makerchip compile's Verilog running live in [VGA Playground](https://github.com/stevehoover/vga-playground) (a fork, for its embedding API): the Tiny VGA PMOD display, inputs and audio. |
 
 Each sets its tab status: working while its results are pending, then success, warning (e.g. a stale `.sv`) or fail.
+TT Build and TT Layout gray a success's check (`success_stale`) once the design compiled in Makerchip isn't the
+build's (by `tt/compiled`, below).
 
 ## Contract
 
@@ -31,6 +33,9 @@ Each sets its tab status: working while its results are pending, then success, w
   only poller of the GitHub API, whose anonymous limit is 60 requests/hour; it polls each minute until the runs
   complete.
 - **RPC `getRunStatus()`** on TT Build (with `rpc: true`) returns the last `tt/run-status` payload.
+- **`tt/compiled` `{tlv, sha256}`** (from the Makerchip extension, `sources: ["platform"]`; subscribed by TT Build and
+  TT Layout): after each Makerchip compile of a TT design, its `.tlv` (relative to the project) and SHA-256 (line
+  endings normalized, as in the `.sv`'s stamp). The views compare it with `summary.json`'s `sv[].tlv_sha256`.
 - **TT VGA** subscribes to the IDE's `compile-result` and `theme` (`sources: ["ide"]`), and needs no `repo`. It
   loads the generated Verilog and the files under `sv_url_inc/` (as listed in `artifacts`) from each successful
   compile's `resultsUrl`. The page's `?playground=<url>` overrides the VGA Playground URL (e.g. a dev server's
@@ -78,8 +83,8 @@ layout) and the commit's `test` and `docs` runs have finished:
 - `manifest.json`: `{sha, published, pdk, runs, sv, omitted, files}`, where `pdk` is `tt_submission/pdk.json`
   (PDK and tool versions), `runs.<workflow>` is `{id, url, status, conclusion, jobs: [{name, status, conclusion,
   url, log, failed_steps}], artifacts}` (for `gds`, the jobs before `viewer`), `sv` lists each `src/*.sv` as
-  `{sv, tlv, fresh, vga}`, `omitted` counts the files left out, by extension (`{files, bytes}`), and `files` lists
-  every file but TT's viewer files.
+  `{sv, tlv, tlv_sha256, fresh, vga}` (`tlv_sha256` as for `tt/compiled`), `omitted` counts the files left out, by
+  extension (`{files, bytes}`), and `files` lists every file but TT's viewer files.
 - `summary.json`: the results at a glance, `{sha, pdk, tiles, runs: {<workflow>: {conclusion, url}}, metrics,
   tests: {rtl, gl}, precheck, failures, sv, datasheet}`. `metrics` are key LibreLane metrics of the final layout,
   by their LibreLane names. `tests.rtl`, `tests.gl` and `precheck` are JUnit results as `{tests, failed, skipped,
